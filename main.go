@@ -52,6 +52,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		noColor  = fs.Bool("no-color", false, "disable colour output")
 		format   = fs.StringP("format", "f", "pretty", "output format: pretty, json, yaml or toml")
 		withPEM  = fs.Bool("pem", false, "include each certificate as PEM")
+		revoc    = fs.Bool("revocation", false, "also query live OCSP (CRL when no OCSP URL) for every certificate except the root")
 		strict   = fs.Bool("strict", false, "exit 2 when any Trust store Verdict fails")
 		showVer  = fs.Bool("version", false, "print version and exit")
 	)
@@ -83,7 +84,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: unsupported --starttls protocol %q (want smtp, imap, pop3 or none)\n", *startTLS)
 		return 1
 	}
-	opts := scan.Options{Timeout: *timeout, SNI: *sni, Network: "tcp", StartTLS: *startTLS}
+	opts := scan.Options{Timeout: *timeout, SNI: *sni, Network: "tcp", StartTLS: *startTLS, Revocation: *revoc}
 	if !slices.Contains(render.Formats, *format) {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: unknown format %q (want %s)\n", *format, strings.Join(render.Formats, ", "))
 		return 1
@@ -120,6 +121,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 			code = 1
 		} else {
 			r.Verdicts = verify.Verify(r.Certs, r.Target.SNI, stores, time.Now())
+			verify.ApplyRevocation(r.Verdicts, r.Revocation)
 			for _, v := range r.Verdicts {
 				verdictFailed = verdictFailed || !v.Pass
 			}

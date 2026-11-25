@@ -35,6 +35,9 @@ type CertOpts struct {
 	IPs        []net.IP
 	NotBefore  time.Time
 	NotAfter   time.Time
+	// OCSPServer and CRLDistributionPoints are the revocation URLs embedded in the certificate.
+	OCSPServer            []string
+	CRLDistributionPoints []string
 }
 
 // Expired returns o with a validity window that ended yesterday.
@@ -79,6 +82,8 @@ func build(t testing.TB, o CertOpts, isCA bool, parent *Cert) Cert {
 		IPAddresses:           o.IPs,
 		BasicConstraintsValid: true,
 		IsCA:                  isCA,
+		OCSPServer:            o.OCSPServer,
+		CRLDistributionPoints: o.CRLDistributionPoints,
 	}
 	if isCA {
 		tmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
@@ -111,6 +116,12 @@ func NewCA(t testing.TB, commonName string) *CA {
 func (ca *CA) NewIntermediate(t testing.TB, commonName string) *CA {
 	t.Helper()
 	return &CA{Cert: build(t, CertOpts{CommonName: commonName}, true, &ca.Cert)}
+}
+
+// NewIntermediateWith issues an intermediate CA signed by ca using o.
+func (ca *CA) NewIntermediateWith(t testing.TB, o CertOpts) *CA {
+	t.Helper()
+	return &CA{Cert: build(t, o, true, &ca.Cert)}
 }
 
 // Issue issues a leaf certificate signed by ca.
