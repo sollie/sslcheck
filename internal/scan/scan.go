@@ -1,5 +1,5 @@
-// Package scan connects to a Target without verification and captures the
-// Presented chain (see ADR-0002).
+// Package scan connects to Targets without verification, captures each
+// Presented chain (see ADR-0002) and judges it into one Verdict per Trust store.
 package scan
 
 import (
@@ -17,11 +17,13 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sollie/sslcheck/internal/ct"
 	"github.com/sollie/sslcheck/internal/revocation"
 	"github.com/sollie/sslcheck/internal/starttls"
+	"github.com/sollie/sslcheck/internal/truststore"
 	"github.com/sollie/sslcheck/internal/verify"
 )
 
@@ -86,6 +88,12 @@ type Options struct {
 	Revocation bool
 	// CTLogs, when set, is the log list SCTs are verified against.
 	CTLogs *ct.LogList
+	// Stores are the Trust stores each Presented chain is verified against.
+	Stores []truststore.Store
+	// Concurrency is the maximum number of Targets scanned in parallel; values below 1 mean 1.
+	Concurrency int
+	// Now is the clock used for expiry, revocation and SCT checks; defaults to time.Now.
+	Now func() time.Time
 }
 
 // Certificate describes one certificate of the Presented chain.
@@ -111,19 +119,51 @@ type Result struct {
 	Chain      []Certificate `json:"chain"`
 	// Certs is the Presented chain as parsed certificates, in the order received.
 	Certs []*x509.Certificate `json:"-"`
-	// Verdicts holds one Verdict per Trust store; filled by the caller via verify.
+	// Verdicts holds one Verdict per Trust store, with revocation and CT findings
+	// applied. It is always populated when Err is nil.
 	Verdicts []verify.Verdict `json:"verdicts,omitempty"`
-	// Revocation holds the Revocation status results; applied to Verdicts by the caller.
+	// Revocation holds the Revocation status results already applied to Verdicts.
 	Revocation []revocation.Result `json:"-"`
 	// CT holds the SCTs found and their verification; nil when no log list was given.
 	CT  *ct.Result `json:"-"`
 	Err error      `json:"-"`
 }
 
-// Scan connects to t, completes the handshake without verifying it and
-// returns the Presented chain in the order received.
-func Scan(ctx context.Context, t Target, opts Options) Result {
+// Failed reports whether any Verdict failed. Unavailable Verdicts do not count.
+func (r Result) Failed() bool {
+	for _, v := range r.Verdicts {
+		if !v.Pass && !v.Unavailable {
+			return true
+		}
+	}
+	return false
+}
+
+// ScanAll scans targets with at most opts.Concurrency in flight; results keep input order.
+func ScanAll(ctx context.Context, targets []Target, opts Options) []Result {
+	results := make([]Result, len(targets))
+	sem := make(chan struct{}, max(opts.Concurrency, 1))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			results[i] = scanOne(ctx, t, opts)
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+// scanOne connects to t, completes the handshake without verifying it,
+// captures the Presented chain in the order received and judges it.
+func scanOne(ctx context.Context, t Target, opts Options) Result {
 	res := Result{Target: t}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = 5 * time.Second
 	}
@@ -189,15 +229,20 @@ func Scan(ctx context.Context, t Target, opts Options) Result {
 	res.TLSVersion = tls.VersionName(state.Version)
 	for _, c := range state.PeerCertificates {
 		res.Certs = append(res.Certs, c)
-		res.Chain = append(res.Chain, describe(c, time.Now()))
+		res.Chain = append(res.Chain, describe(c, now()))
 	}
 	// Live lookups get their own --timeout budget; the staple needs no network.
 	rctx, rcancel := context.WithTimeout(parent, opts.Timeout)
 	defer rcancel()
-	res.Revocation = revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, time.Now())
+	res.Revocation = revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, now())
 	if opts.CTLogs != nil {
-		r := ct.Verify(*opts.CTLogs, res.Certs, state.SignedCertificateTimestamps, state.OCSPResponse, time.Now())
+		r := ct.Verify(*opts.CTLogs, res.Certs, state.SignedCertificateTimestamps, state.OCSPResponse, now())
 		res.CT = &r
+	}
+	res.Verdicts = verify.Verify(res.Certs, t.SNI, opts.Stores, now())
+	verify.ApplyRevocation(res.Verdicts, res.Revocation)
+	if res.CT != nil {
+		verify.ApplyCT(res.Verdicts, *res.CT)
 	}
 	return res
 }
