@@ -6,8 +6,10 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
+	"github.com/sollie/sslcheck/internal/revocation"
 	"github.com/sollie/sslcheck/internal/truststore"
 )
 
@@ -20,6 +22,7 @@ const (
 	ReasonNotYetValid      = "not yet valid"
 	ReasonUnknownAuthority = "unknown authority"
 	ReasonHostnameMismatch = "hostname mismatch"
+	ReasonRevoked          = "revoked"
 )
 
 // Severity of a Finding.
@@ -127,4 +130,24 @@ func verifyOne(chain []*x509.Certificate, name string, store truststore.Store, n
 		v.Findings = append(v.Findings, Finding{Warning, fmt.Sprintf("leaf certificate expires in %d days", days)})
 	}
 	return v
+}
+
+// ApplyRevocation folds Revocation status results into verdicts: a revoked
+// certificate fails the Verdict, an unknown status only adds a warning.
+func ApplyRevocation(verdicts []Verdict, results []revocation.Result) {
+	for i := range verdicts {
+		v := &verdicts[i]
+		for _, r := range results {
+			switch r.Status {
+			case revocation.Revoked:
+				if !slices.Contains(v.Reasons, ReasonRevoked) {
+					v.Reasons = append(v.Reasons, ReasonRevoked)
+				}
+				v.Findings = append(v.Findings, Finding{Failure, fmt.Sprintf("certificate %d is revoked (%s): %s", r.Cert, r.Source, r.Detail)})
+			case revocation.Unknown:
+				v.Findings = append(v.Findings, Finding{Warning, fmt.Sprintf("revocation status of certificate %d is unknown (%s): %s", r.Cert, r.Source, r.Detail)})
+			}
+		}
+		v.Pass = len(v.Reasons) == 0
+	}
 }

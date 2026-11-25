@@ -3,6 +3,7 @@ package render
 
 import (
 	"fmt"
+	"github.com/sollie/sslcheck/internal/revocation"
 	"io"
 	"strings"
 
@@ -71,6 +72,11 @@ func PrettyPEM(w io.Writer, results []scan.Result, useColor, withPEM bool) {
 			field("Signature", c.SigAlgorithm)
 			field("Key", fmt.Sprintf("%s %d bits", c.KeyType, c.KeyBits))
 			field("SHA-256", c.SHA256)
+			for _, rv := range r.Revocation {
+				if rv.Cert == n {
+					field("Revocation", revocationText(p, rv))
+				}
+			}
 			if withPEM {
 				_, _ = fmt.Fprintf(w, "\n%s", c.PEM)
 			}
@@ -87,4 +93,15 @@ func expiry(p palette, days int) string {
 		return p.warn.Sprintf("%d days remaining (warning)", days)
 	}
 	return p.ok.Sprintf("%d days remaining", days)
+}
+
+func revocationText(p palette, rv revocation.Result) string {
+	text := fmt.Sprintf("%s (%s)", rv.Status, rv.Source)
+	switch rv.Status {
+	case revocation.Good:
+		return p.ok.Sprint(text)
+	case revocation.Revoked:
+		return p.bad.Sprint(text)
+	}
+	return p.warn.Sprint(text)
 }
