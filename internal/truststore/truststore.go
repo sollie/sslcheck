@@ -25,6 +25,9 @@ var mozillaPEM []byte
 type Store struct {
 	Name  string
 	Roots *x509.CertPool
+	// Unavailable marks a store that holds no roots at all, e.g. the system
+	// store inside a FROM scratch container.
+	Unavailable bool
 }
 
 // Mozilla returns the embedded Mozilla bundle.
@@ -54,7 +57,7 @@ func System(env map[string]string) (Store, error) {
 	if err != nil {
 		return Store{}, fmt.Errorf("load system trust store: %w", err)
 	}
-	return Store{Name: "System", Roots: pool}, nil
+	return Store{Name: "System", Roots: pool, Unavailable: pool.Equal(x509.NewCertPool())}, nil
 }
 
 // Default returns the Mozilla and system stores, in that order.

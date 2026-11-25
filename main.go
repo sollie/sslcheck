@@ -121,7 +121,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		} else {
 			r.Verdicts = verify.Verify(r.Certs, r.Target.SNI, stores, time.Now())
 			for _, v := range r.Verdicts {
-				verdictFailed = verdictFailed || !v.Pass
+				verdictFailed = verdictFailed || (!v.Pass && !v.Unavailable)
 			}
 		}
 	}

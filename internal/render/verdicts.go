@@ -14,6 +14,10 @@ func writeVerdicts(w io.Writer, p palette, verdicts []verify.Verdict) {
 	}
 	_, _ = fmt.Fprintf(w, "\n%s\n", p.heading.Sprint("Verdicts"))
 	for _, v := range verdicts {
+		if v.Unavailable {
+			_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprintf("%-8s", v.Store+":"), p.warn.Sprint("unavailable (store has no roots)"))
+			continue
+		}
 		status := p.ok.Sprint("pass")
 		if !v.Pass {
 			status = p.bad.Sprintf("fail (%s)", strings.Join(v.Reasons, ", "))

@@ -41,6 +41,9 @@ type Finding struct {
 type Verdict struct {
 	Store string
 	Pass  bool
+	// Unavailable reports that the store holds no roots, so no verdict could be
+	// reached; it is neither a pass nor a failure.
+	Unavailable bool
 	// Reasons lists the failure reasons; empty when Pass.
 	Reasons []string
 	// Path is the verified path as subject strings, leaf first, ending at the anchor.
@@ -64,6 +67,10 @@ func Verify(chain []*x509.Certificate, name string, stores []truststore.Store, n
 
 func verifyOne(chain []*x509.Certificate, name string, store truststore.Store, now time.Time) Verdict {
 	v := Verdict{Store: store.Name, Name: name}
+	if store.Unavailable {
+		v.Unavailable = true
+		return v
+	}
 	if len(chain) == 0 {
 		v.Reasons = []string{ReasonUnknownAuthority}
 		v.Findings = []Finding{{Failure, "no certificates presented"}}
