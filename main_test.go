@@ -120,3 +120,76 @@ func TestUsageErrorsExitOne(t *testing.T) {
 		})
 	}
 }
+
+func TestSTARTTLSProtocolsScanThroughUpgrade(t *testing.T) {
+	for _, proto := range []string{"smtp", "imap", "pop3"} {
+		t.Run(proto, func(t *testing.T) {
+			leaf := testutil.SelfSigned(t, testutil.CertOpts{CommonName: proto + ".test"})
+			srv := testutil.StartSTARTTLS(t, proto, false, leaf)
+
+			code, out, errs := runCLI(t, nil, "--no-color", "--starttls", proto, srv.Addr)
+			if code != 0 {
+				t.Fatalf("exit %d, stderr: %s\n%s", code, errs, out)
+			}
+			if !strings.Contains(out, proto+".test") {
+				t.Errorf("output missing subject:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestSTARTTLSRefusalGivesClearError(t *testing.T) {
+	for _, proto := range []string{"smtp", "imap", "pop3"} {
+		t.Run(proto, func(t *testing.T) {
+			leaf := testutil.SelfSigned(t, testutil.CertOpts{CommonName: "x.test"})
+			srv := testutil.StartSTARTTLS(t, proto, true, leaf)
+
+			code, out, _ := runCLI(t, nil, "--no-color", "--starttls", proto, srv.Addr)
+			if code != 1 {
+				t.Errorf("exit %d, want 1", code)
+			}
+			if !strings.Contains(out, "STARTTLS") || !strings.Contains(out, proto) {
+				t.Errorf("expected clear STARTTLS refusal naming %s:\n%s", proto, out)
+			}
+		})
+	}
+}
+
+func TestUnknownSTARTTLSProtocolIsUsageError(t *testing.T) {
+	if code, _, errs := runCLI(t, nil, "--starttls", "ftp", "example.com:21"); code != 1 || !strings.Contains(errs, "ftp") {
+		t.Errorf("exit %d, stderr %q", code, errs)
+	}
+}
+
+// Nothing is expected to listen on these well-known ports on the test host;
+// the connection error reveals whether a STARTTLS upgrade was inferred.
+func TestSTARTTLSInferredFromPort(t *testing.T) {
+	for port, proto := range map[string]string{"25": "smtp", "587": "smtp", "143": "imap", "110": "pop3"} {
+		_, out, _ := runCLI(t, nil, "--no-color", "--timeout", "1s", "127.0.0.1:"+port)
+		if !strings.Contains(out, "STARTTLS "+proto) {
+			t.Errorf("port %s: expected inferred %s:\n%s", port, proto, out)
+		}
+	}
+	for _, port := range []string{"465", "993", "995", "5061"} {
+		_, out, _ := runCLI(t, nil, "--no-color", "--timeout", "1s", "127.0.0.1:"+port)
+		if strings.Contains(out, "STARTTLS") {
+			t.Errorf("port %s: implicit TLS must not use STARTTLS:\n%s", port, out)
+		}
+	}
+}
+
+func TestSTARTTLSFlagOverridesInference(t *testing.T) {
+	_, out, _ := runCLI(t, nil, "--no-color", "--timeout", "1s", "--starttls", "imap", "127.0.0.1:25")
+	if !strings.Contains(out, "STARTTLS imap") {
+		t.Errorf("flag should win over port inference:\n%s", out)
+	}
+}
+
+func TestImplicitTLSPortNeedsNoFlag(t *testing.T) {
+	leaf := testutil.SelfSigned(t, testutil.CertOpts{CommonName: "implicit.test"})
+	srv := testutil.StartTLS(t, leaf)
+	code, out, errs := runCLI(t, nil, "--no-color", "--starttls", "none", srv.Addr)
+	if code != 0 || !strings.Contains(out, "implicit.test") {
+		t.Errorf("exit %d, stderr %s\n%s", code, errs, out)
+	}
+}

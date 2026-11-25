@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sollie/sslcheck/internal/starttls"
 )
 
 // Target is a host, port and optional SNI name to scan.
@@ -73,6 +75,9 @@ type Options struct {
 	Network string
 	// SNI overrides the server name; defaults to the Target host.
 	SNI string
+	// StartTLS is "smtp", "imap" or "pop3" to upgrade in-band before the
+	// handshake, "none" to force implicit TLS, or "" to infer from the port.
+	StartTLS string
 }
 
 // Certificate describes one certificate of the Presented chain.
@@ -127,15 +132,43 @@ func Scan(ctx context.Context, t Target, opts Options) Result {
 	if net.ParseIP(sni) == nil {
 		cfg.ServerName = sni
 	}
-	dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
-	conn, err := dialer.DialContext(ctx, network, t.Address())
-	if err != nil {
-		res.Err = err
-		return res
+	proto := opts.StartTLS
+	if proto == "" {
+		proto = starttls.Infer(t.Port)
 	}
-	defer func() { _ = conn.Close() }()
+	var tlsConn *tls.Conn
+	if proto == "" || proto == starttls.None {
+		dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
+		conn, err := dialer.DialContext(ctx, network, t.Address())
+		if err != nil {
+			res.Err = err
+			return res
+		}
+		tlsConn = conn.(*tls.Conn)
+	} else {
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, t.Address())
+		if err != nil {
+			res.Err = fmt.Errorf("STARTTLS %s: %w", proto, err)
+			return res
+		}
+		if dl, ok := ctx.Deadline(); ok {
+			_ = conn.SetDeadline(dl)
+		}
+		if err := starttls.Upgrade(conn, proto); err != nil {
+			_ = conn.Close()
+			res.Err = err
+			return res
+		}
+		tlsConn = tls.Client(conn, cfg)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			res.Err = err
+			return res
+		}
+	}
+	defer func() { _ = tlsConn.Close() }()
 
-	state := conn.(*tls.Conn).ConnectionState()
+	state := tlsConn.ConnectionState()
 	res.TLSVersion = tls.VersionName(state.Version)
 	for _, c := range state.PeerCertificates {
 		res.Chain = append(res.Chain, describe(c, time.Now()))
