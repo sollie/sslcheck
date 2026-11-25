@@ -57,6 +57,9 @@ func TestStructuredFormatsParseBackToSameData(t *testing.T) {
 	if first.Results[1].Error == "" || len(first.Results[1].Chain) != 0 {
 		t.Errorf("error result not reported: %+v", first.Results[1])
 	}
+	if vs := first.Results[0].Verdicts; len(vs) == 0 || vs[0].Name == "" {
+		t.Errorf("Verdict should name the hostname checked: %+v", vs)
+	}
 	for i, r := range reports[1:] {
 		if !reflect.DeepEqual(first, r) {
 			t.Errorf("format %d differs from json:\n%+v\n%+v", i+1, first, r)

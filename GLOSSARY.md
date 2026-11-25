@@ -24,6 +24,10 @@ _Avoid_: Validation result, status
 One run against a Target. It always completes and reports, even when the chain is expired, self-signed or untrusted. Its outcome is either an error (no Presented chain was obtained) or one Verdict per Trust store.
 _Avoid_: Check, probe
 
+**Report**:
+The rendered output of one or more Scans, in pretty, json, yaml or toml form.
+_Avoid_: Output, result (a Scan's outcome is not its Report)
+
 **Revocation status**:
 Whether a certificate in the Presented chain is `good`, `revoked` or `unknown`, from a staple, OCSP or CRL. `unknown` never fails a Verdict.
 _Avoid_: Revocation check, CRL result

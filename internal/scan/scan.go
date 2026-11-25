@@ -98,35 +98,35 @@ type Options struct {
 
 // Certificate describes one certificate of the Presented chain.
 type Certificate struct {
-	Subject       string    `json:"subject"`
-	SANs          []string  `json:"sans"`
-	Issuer        string    `json:"issuer"`
-	Serial        string    `json:"serial"`
-	NotBefore     time.Time `json:"not_before"`
-	NotAfter      time.Time `json:"not_after"`
-	DaysRemaining int       `json:"days_remaining"`
-	SigAlgorithm  string    `json:"signature_algorithm"`
-	KeyType       string    `json:"key_type"`
-	KeyBits       int       `json:"key_bits"`
-	SHA256        string    `json:"sha256_fingerprint"`
-	PEM           string    `json:"pem"`
+	Subject       string
+	SANs          []string
+	Issuer        string
+	Serial        string
+	NotBefore     time.Time
+	NotAfter      time.Time
+	DaysRemaining int
+	SigAlgorithm  string
+	KeyType       string
+	KeyBits       int
+	SHA256        string
+	PEM           string
+	// Revocation holds the Revocation status results for this certificate.
+	Revocation []revocation.Result
 }
 
 // Result is the outcome of scanning one Target.
 type Result struct {
-	Target     Target        `json:"target"`
-	TLSVersion string        `json:"tls_version"`
-	Chain      []Certificate `json:"chain"`
+	Target     Target
+	TLSVersion string
+	Chain      []Certificate
 	// Certs is the Presented chain as parsed certificates, in the order received.
-	Certs []*x509.Certificate `json:"-"`
+	Certs []*x509.Certificate
 	// Verdicts holds one Verdict per Trust store, with revocation and CT findings
 	// applied. It is always populated when Err is nil.
-	Verdicts []verify.Verdict `json:"verdicts,omitempty"`
-	// Revocation holds the Revocation status results already applied to Verdicts.
-	Revocation []revocation.Result `json:"-"`
+	Verdicts []verify.Verdict
 	// CT holds the SCTs found and their verification; nil when no log list was given.
-	CT  *ct.Result `json:"-"`
-	Err error      `json:"-"`
+	CT  *ct.Result
+	Err error
 }
 
 // Failed reports whether any Verdict failed. Unavailable Verdicts do not count.
@@ -234,13 +234,16 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 	// Live lookups get their own --timeout budget; the staple needs no network.
 	rctx, rcancel := context.WithTimeout(parent, opts.Timeout)
 	defer rcancel()
-	res.Revocation = revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, now())
+	revs := revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, now())
+	for _, rv := range revs {
+		res.Chain[rv.Cert].Revocation = append(res.Chain[rv.Cert].Revocation, rv)
+	}
 	if opts.CTLogs != nil {
 		r := ct.Verify(*opts.CTLogs, res.Certs, state.SignedCertificateTimestamps, state.OCSPResponse, now())
 		res.CT = &r
 	}
 	res.Verdicts = verify.Verify(res.Certs, t.SNI, opts.Stores, now())
-	verify.ApplyRevocation(res.Verdicts, res.Revocation)
+	verify.ApplyRevocation(res.Verdicts, revs)
 	if res.CT != nil {
 		verify.ApplyCT(res.Verdicts, *res.CT)
 	}
