@@ -39,12 +39,12 @@ func NewCTLog(t testing.TB, name string) *CTLog {
 	return &CTLog{Name: name, Key: key, spki: spki, id: sha256.Sum256(spki)}
 }
 
-func (l *CTLog) sign(t testing.TB, ts time.Time, entry func(b *cryptobyte.Builder)) []byte {
+func (l *CTLog) sign(t testing.TB, millis uint64, entry func(b *cryptobyte.Builder)) []byte {
 	t.Helper()
 	var b cryptobyte.Builder
 	b.AddUint8(0)
 	b.AddUint8(0)
-	b.AddUint64(uint64(ts.UnixMilli())) //nolint:gosec // test timestamps are positive
+	b.AddUint64(millis)
 	entry(&b)
 	b.AddUint16(0)
 	signed, err := b.Bytes()
@@ -59,7 +59,7 @@ func (l *CTLog) sign(t testing.TB, ts time.Time, entry func(b *cryptobyte.Builde
 	var out cryptobyte.Builder
 	out.AddUint8(0)
 	out.AddBytes(l.id[:])
-	out.AddUint64(uint64(ts.UnixMilli())) //nolint:gosec // test timestamps are positive
+	out.AddUint64(millis)
 	out.AddUint16(0)
 	out.AddUint8(4)
 	out.AddUint8(3)
@@ -75,16 +75,30 @@ func (l *CTLog) sign(t testing.TB, ts time.Time, entry func(b *cryptobyte.Builde
 // extension or a stapled OCSP response.
 func (l *CTLog) SignX509(t testing.TB, c *Cert) []byte {
 	t.Helper()
-	return l.sign(t, time.Now().Add(-time.Minute), func(b *cryptobyte.Builder) {
+	return l.sign(t, minuteAgo(), func(b *cryptobyte.Builder) {
 		b.AddUint16(0)
 		b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) { b.AddBytes(c.DER) })
 	})
 }
 
+// SignX509AtMillis is SignX509 with a raw SCT timestamp in milliseconds, which
+// may lie outside the range time.Time can represent.
+func (l *CTLog) SignX509AtMillis(t testing.TB, c *Cert, millis uint64) []byte {
+	t.Helper()
+	return l.sign(t, millis, func(b *cryptobyte.Builder) {
+		b.AddUint16(0)
+		b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) { b.AddBytes(c.DER) })
+	})
+}
+
+func minuteAgo() uint64 {
+	return uint64(time.Now().Add(-time.Minute).UnixMilli()) //nolint:gosec // test timestamps are positive
+}
+
 func (l *CTLog) signPrecert(t testing.TB, issuerSPKI, tbs []byte) []byte {
 	t.Helper()
 	keyHash := sha256.Sum256(issuerSPKI)
-	return l.sign(t, time.Now().Add(-time.Minute), func(b *cryptobyte.Builder) {
+	return l.sign(t, minuteAgo(), func(b *cryptobyte.Builder) {
 		b.AddUint16(1)
 		b.AddBytes(keyHash[:])
 		b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) { b.AddBytes(tbs) })

@@ -18,6 +18,10 @@ import (
 	"golang.org/x/crypto/ocsp"
 )
 
+// maxTimestampMillis bounds SCT timestamps to year 9999, so they convert to a
+// time.Time without wrapping.
+const maxTimestampMillis = 253402300799999
+
 // MinSCTs is how many valid SCTs from distinct logs a certificate should carry.
 const MinSCTs = 2
 
@@ -104,11 +108,16 @@ func Verify(list LogList, chain []*x509.Certificate, roots []*x509.CertPool, tls
 	good := map[[32]byte]bool{}
 	for _, r := range raws {
 		s := SCT{
-			Source:    r.source,
-			LogID:     base64.StdEncoding.EncodeToString(r.logID[:]),
-			Timestamp: time.UnixMilli(int64(r.timestamp)).UTC(), //nolint:gosec // millisecond timestamps fit in int64
+			Source: r.source,
+			LogID:  base64.StdEncoding.EncodeToString(r.logID[:]),
 		}
-		if err := r.check(list, leaf, issuer, now); err != nil {
+		inRange := r.timestamp <= maxTimestampMillis
+		if inRange {
+			s.Timestamp = time.UnixMilli(int64(r.timestamp)).UTC() //nolint:gosec // bounded by maxTimestampMillis
+		}
+		if !inRange {
+			s.Detail = "SCT timestamp is out of range"
+		} else if err := r.check(list, leaf, issuer, now); err != nil {
 			s.Detail = err.Error()
 		} else {
 			s.Valid = true
