@@ -132,3 +132,34 @@ func TestColourRules(t *testing.T) {
 		t.Error("structured output must never be coloured")
 	}
 }
+
+func TestStructuredOutputCarriesVerdicts(t *testing.T) {
+	root := testutil.NewCA(t, "Test Root")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "leaf.test", DNSNames: []string{"leaf.test"}})
+	srv := testutil.StartTLS(t, leaf, &root.Cert)
+	tf := trustFile(t, root)
+
+	for _, f := range []string{"json", "yaml", "toml"} {
+		t.Run(f, func(t *testing.T) {
+			code, out, errs := runCLI(t, map[string]string{"SSLCHECK_TRUST_STORE": tf}, "-f", f, "--sni", "leaf.test", srv.Addr)
+			if code != 0 {
+				t.Fatalf("exit %d: %s", code, errs)
+			}
+			vs := decode(t, f, out).Results[0].Verdicts
+			if len(vs) != 2 {
+				t.Fatalf("want 2 verdicts, got %+v", vs)
+			}
+			moz, sys := vs[0], vs[1]
+			if sys.Store != "System" || !sys.Pass || !sys.HostnameMatch || sys.StoreInfo == "" ||
+				len(sys.Path) != 2 || !strings.Contains(sys.Anchor, "Test Root") {
+				t.Errorf("unexpected System verdict: %+v", sys)
+			}
+			if moz.Store != "Mozilla" || moz.Pass || !reflect.DeepEqual(moz.Reasons, []string{"unknown authority"}) {
+				t.Errorf("unexpected Mozilla verdict: %+v", moz)
+			}
+			if len(moz.Findings) == 0 || moz.Findings[0].Severity == "" || moz.Findings[0].Message == "" {
+				t.Errorf("findings missing: %+v", moz)
+			}
+		})
+	}
+}

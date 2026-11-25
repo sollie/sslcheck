@@ -74,7 +74,9 @@ SCTs and one verdict per trust store with its path, anchor and findings.
 
 `json`, `yaml` and `toml` carry the same data in a stable structure with a
 top-level `schema_version` (currently `1`) and a `results` list, one entry per
-target.
+target. Each result includes a `verdicts` list with one entry per trust store
+(`store`, `store_info`, `pass`, `unavailable`, `reasons`, `path`, `anchor`,
+`hostname_match` and `findings` with `severity` and `message`).
 
 Colour is used only on a terminal. It is disabled by `--no-color` or
 `NO_COLOR`, and forced by `CLICOLOR_FORCE` (any value but `0`).
@@ -146,7 +148,8 @@ docker run --rm -v sslcheck-cache:/cache ghcr.io/sollie/sslcheck example.com
 ```
 
 The image has no system trust store, so the System verdict is reported as
-unavailable there.
+unavailable there. Updates still work: when the system has no roots, the
+downloader trusts the embedded Mozilla bundle.
 
 ## Not yet
 

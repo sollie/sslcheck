@@ -3,6 +3,7 @@ package truststore
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
@@ -109,6 +110,19 @@ type UpdateResult struct {
 	Certificates int
 }
 
+// HTTPClient returns the client used for updates. When the system has no root
+// certificates (for example in a scratch container) it trusts the embedded
+// Mozilla bundle, so HTTPS downloads still work.
+func HTTPClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if pool, err := x509.SystemCertPool(); err != nil || pool.Equal(x509.NewCertPool()) {
+		if emb, err := embedded(); err == nil {
+			tr.TLSClientConfig = &tls.Config{RootCAs: emb.Roots, MinVersion: tls.VersionTLS12}
+		}
+	}
+	return &http.Client{Timeout: 30 * time.Second, Transport: tr}
+}
+
 // Update downloads the Mozilla bundle and its SHA-256, validates it and
 // stores it in CacheDir. It checks that the checksum matches, that the bundle
 // parses, that it holds at least MinCertificates and that it is newer than the
@@ -116,7 +130,7 @@ type UpdateResult struct {
 // bundle is left untouched. The checksum guards integrity, not authenticity.
 func Update(ctx context.Context, env map[string]string, client *http.Client) (UpdateResult, error) {
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = HTTPClient()
 	}
 	url := env[EnvBundleURL]
 	if url == "" {

@@ -31,10 +31,31 @@ type Result struct {
 	Chain      []Certificate `json:"chain,omitempty" yaml:"chain,omitempty" toml:"chain,omitempty"`
 	// SCTs lists every SCT found, with its verification outcome.
 	SCTs []SCT `json:"scts,omitempty" yaml:"scts,omitempty" toml:"scts,omitempty"`
+	// Verdicts holds one Verdict per Trust store; absent when the scan failed.
+	Verdicts []Verdict `json:"verdicts,omitempty" yaml:"verdicts,omitempty" toml:"verdicts,omitempty"`
 	// SCTCount is the number of SCTs found and SCTValid the number of distinct logs with a valid one.
 	SCTCount   int    `json:"sct_count" yaml:"sct_count" toml:"sct_count"`
 	SCTValid   int    `json:"sct_valid" yaml:"sct_valid" toml:"sct_valid"`
 	SCTLogList string `json:"sct_log_list,omitempty" yaml:"sct_log_list,omitempty" toml:"sct_log_list,omitempty"`
+}
+
+// Verdict is the outcome of verifying the chain against one Trust store.
+type Verdict struct {
+	Store         string    `json:"store" yaml:"store" toml:"store"`
+	StoreInfo     string    `json:"store_info" yaml:"store_info" toml:"store_info"`
+	Pass          bool      `json:"pass" yaml:"pass" toml:"pass"`
+	Unavailable   bool      `json:"unavailable" yaml:"unavailable" toml:"unavailable"`
+	Reasons       []string  `json:"reasons,omitempty" yaml:"reasons,omitempty" toml:"reasons,omitempty"`
+	Path          []string  `json:"path,omitempty" yaml:"path,omitempty" toml:"path,omitempty"`
+	Anchor        string    `json:"anchor,omitempty" yaml:"anchor,omitempty" toml:"anchor,omitempty"`
+	HostnameMatch bool      `json:"hostname_match" yaml:"hostname_match" toml:"hostname_match"`
+	Findings      []Finding `json:"findings,omitempty" yaml:"findings,omitempty" toml:"findings,omitempty"`
+}
+
+// Finding is a problem or notice raised in a Verdict.
+type Finding struct {
+	Severity string `json:"severity" yaml:"severity" toml:"severity"`
+	Message  string `json:"message" yaml:"message" toml:"message"`
 }
 
 // SCT is one signed certificate timestamp.
@@ -114,6 +135,14 @@ func NewReport(results []scan.Result, withPEM bool) Report {
 				}
 				out.SCTs = append(out.SCTs, SCT{Source: s.Source, LogID: s.LogID, Log: s.Log, Timestamp: ts, Valid: s.Valid, Detail: s.Detail})
 			}
+		}
+		for _, v := range r.Verdicts {
+			vo := Verdict{Store: v.Store, StoreInfo: v.StoreInfo, Pass: v.Pass, Unavailable: v.Unavailable,
+				Reasons: v.Reasons, Path: v.Path, Anchor: v.Anchor, HostnameMatch: v.HostnameMatch}
+			for _, f := range v.Findings {
+				vo.Findings = append(vo.Findings, Finding{Severity: string(f.Severity), Message: f.Message})
+			}
+			out.Verdicts = append(out.Verdicts, vo)
 		}
 		rep.Results = append(rep.Results, out)
 	}

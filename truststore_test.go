@@ -111,8 +111,6 @@ func TestUpdateRejectsBadBundlesAndStoresNothing(t *testing.T) {
 		"bad checksum":  {good, sum([]byte("other")), "checksum"},
 		"unparseable":   {[]byte("not a pem"), sum([]byte("not a pem")), "certificates"},
 		"too small":     {append([]byte(newerDateLine+"\n"), root.PEM()...), sum(append([]byte(newerDateLine+"\n"), root.PEM()...)), "too few"},
-		"not newer":     {bundleWith(t, "## Certificate data from Mozilla as of: Thu Nov  5 04:12:01 2026 GMT"), "", "newer"},
-		"older":         {bundleWith(t, olderDateLine), "", "newer"},
 		"no date line":  {dateLineRE.ReplaceAll(good, nil), "", "date"},
 		"empty sum":     {good, "\n", "checksum"},
 		"malformed sum": {good, "zzzz  cacert.pem\n", "checksum"},
@@ -129,6 +127,31 @@ func TestUpdateRejectsBadBundlesAndStoresNothing(t *testing.T) {
 			}
 			if entries, _ := os.ReadDir(cache); len(entries) != 0 {
 				t.Errorf("nothing should be stored, found %v", entries)
+			}
+		})
+	}
+}
+
+func TestUpdateWithBundleNotNewerStillRefreshesCTAndExitsZero(t *testing.T) {
+	for name, line := range map[string]string{
+		"same":  "## Certificate data from Mozilla as of: Thu Nov  5 04:12:01 2026 GMT",
+		"older": olderDateLine,
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundle := bundleWith(t, line)
+			env, cache := updateEnv(t, bundle, sum(bundle))
+			code, out, errs := runCLI(t, env, "--update-trust-store")
+			if code != 0 {
+				t.Fatalf("exit %d, stderr %q", code, errs)
+			}
+			if !strings.Contains(out, "Trust store is already up to date") {
+				t.Errorf("stdout should say trust store is up to date: %q", out)
+			}
+			if _, err := os.Stat(filepath.Join(cache, "sslcheck", "cacert.pem")); err == nil {
+				t.Error("bundle should not be stored")
+			}
+			if !strings.Contains(out, "CT log list") {
+				t.Errorf("CT refresh should still run: %q", out)
 			}
 		})
 	}

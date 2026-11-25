@@ -157,12 +157,16 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 // updateData implements --update-trust-store.
 func updateData(stdout, stderr io.Writer, env map[string]string) int {
 	res, err := truststore.Update(context.Background(), env, nil)
-	if err != nil {
+	switch {
+	case errors.Is(err, truststore.ErrNotNewer):
+		_, _ = fmt.Fprintln(stdout, "Trust store is already up to date")
+	case err != nil:
 		_, _ = fmt.Fprintf(stderr, "sslcheck: update trust store: %v\n", err)
 		return 1
+	default:
+		_, _ = fmt.Fprintf(stdout, "Trust store updated: %d certificates, dated %s, stored in %s\n",
+			res.Certificates, res.Date.UTC().Format(time.DateOnly), res.Path)
 	}
-	_, _ = fmt.Fprintf(stdout, "Trust store updated: %d certificates, dated %s, stored in %s\n",
-		res.Certificates, res.Date.UTC().Format(time.DateOnly), res.Path)
 	list, err := ct.Update(context.Background(), env, nil)
 	switch {
 	case errors.Is(err, ct.ErrNotNewer):

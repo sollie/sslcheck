@@ -169,7 +169,7 @@ type UpdateResult struct {
 // logs may raise warnings, never a failure.
 func Update(ctx context.Context, env map[string]string, client *http.Client) (UpdateResult, error) {
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = truststore.HTTPClient()
 	}
 	url := env[EnvLogListURL]
 	if url == "" {
