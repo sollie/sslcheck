@@ -3,18 +3,17 @@ package truststore
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/sollie/sslcheck/internal/httppolicy"
 	"github.com/sollie/sslcheck/internal/refresh"
 )
 
@@ -86,38 +85,13 @@ func parseBundle(data []byte) (bundle, error) {
 // Mozilla bundle, so HTTPS downloads still work. SSL_CERT_FILE in env adds
 // roots from that file. Redirects from HTTPS to HTTP are refused.
 func HTTPClient(env map[string]string) *http.Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool.Equal(x509.NewCertPool()) {
-		pool = nil
-		if emb, err := Embedded(); err == nil {
-			pool = emb.Roots
-		}
-	}
-	if file := env["SSL_CERT_FILE"]; file != "" {
-		if pem, err := os.ReadFile(file); err == nil { //nolint:gosec // operator-supplied roots
-			if pool == nil {
-				pool = x509.NewCertPool()
-			}
-			pool.AppendCertsFromPEM(pem)
-		}
-	}
-	if pool != nil {
-		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
-	}
-	return &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: tr,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.New("stopped after 10 redirects")
-			}
-			if via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
-				return fmt.Errorf("refusing redirect from HTTPS to %s", req.URL.Redacted())
-			}
+	return httppolicy.NewClient(httppolicy.Update(env, func() *x509.CertPool {
+		emb, err := Embedded()
+		if err != nil {
 			return nil
-		},
-	}
+		}
+		return emb.Roots
+	}))
 }
 
 // Update downloads the Mozilla bundle and its SHA-256 and stores it in the
