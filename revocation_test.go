@@ -1,8 +1,13 @@
 package main
 
 import (
+	"crypto/tls"
 	"crypto/x509"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -276,6 +281,34 @@ func TestRedirectToDisallowedSchemeRefused(t *testing.T) {
 	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--allow-private-revocation", "--sni", "ok.test", srv.Addr)
 	if !strings.Contains(out, "unknown (ocsp)") || !strings.Contains(out, "scheme") {
 		t.Errorf("redirect to ftp should be refused:\n%s", out)
+	}
+}
+
+func TestRevocationRefusesHTTPSToHTTPRedirect(t *testing.T) {
+	var plainHits atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		plainHits.Add(1)
+	}))
+	t.Cleanup(plain.Close)
+
+	f := newRevFixture(t, testutil.CertOpts{})
+	mirror := f.root.Issue(t, testutil.CertOpts{CommonName: "responder.test", IPs: []net.IP{net.IPv4(127, 0, 0, 1)}})
+	secure := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/ocsp", http.StatusFound)
+	}))
+	secure.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{mirror.DER}, PrivateKey: mirror.Signer()}}, MinVersion: tls.VersionTLS12}
+	secure.StartTLS()
+	t.Cleanup(secure.Close)
+
+	leaf := f.inter.Issue(t, testutil.CertOpts{CommonName: "ok.test", DNSNames: []string{"ok.test"}, OCSPServer: []string{secure.URL + "/ocsp"}})
+	srv := testutil.StartTLS(t, leaf, &f.inter.Cert, &f.root.Cert)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--allow-private-revocation", "--sni", "ok.test", srv.Addr)
+	if !strings.Contains(out, "unknown (ocsp)") || !strings.Contains(out, "HTTPS") {
+		t.Errorf("HTTPS to HTTP redirect should be refused:\n%s", out)
+	}
+	if plainHits.Load() != 0 {
+		t.Error("the cleartext server must never be contacted")
 	}
 }
 

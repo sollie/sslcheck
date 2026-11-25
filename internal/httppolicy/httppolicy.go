@@ -62,6 +62,10 @@ func Update(env map[string]string, fallback func() *x509.CertPool) Policy {
 
 // NewClient returns an HTTP client enforcing p.
 func NewClient(p Policy) *http.Client {
+	if p.EnvProxy && p.BlockInternal {
+		// A proxy dials on our behalf, so the destination block cannot be enforced.
+		panic("httppolicy: EnvProxy and BlockInternal cannot be combined")
+	}
 	var tr *http.Transport
 	if p.EnvProxy {
 		tr = http.DefaultTransport.(*http.Transport).Clone()

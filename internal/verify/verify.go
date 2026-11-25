@@ -246,6 +246,8 @@ type Evidence struct {
 	// OCSPResponse is the stapled response, if any.
 	OCSPResponse []byte
 	SCTs         [][]byte
+	// TLSVersion is the negotiated TLS version name; judging ignores it.
+	TLSVersion string
 	// CipherSuite is the negotiated cipher suite ID.
 	CipherSuite uint16
 	// At is the single clock reading every stage of the Scan judges as of.
