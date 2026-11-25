@@ -11,6 +11,8 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/sollie/sslcheck/internal/render"
 	"github.com/sollie/sslcheck/internal/scan"
+	"github.com/sollie/sslcheck/internal/truststore"
+	"github.com/sollie/sslcheck/internal/verify"
 	"github.com/spf13/pflag"
 )
 
@@ -25,7 +27,8 @@ func main() {
 }
 
 // run is the testable entry point. It returns the process exit code:
-// 0 when every Scan completed, 1 for connection and usage errors.
+// 0 when every Scan completed, 1 for connection and usage errors, and 2 when
+// --strict is given and any Verdict fails.
 func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 	fs := pflag.NewFlagSet("sslcheck", pflag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -39,6 +42,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		ipv4    = fs.BoolP("ipv4", "4", false, "connect over IPv4 only")
 		ipv6    = fs.BoolP("ipv6", "6", false, "connect over IPv6 only")
 		noColor = fs.Bool("no-color", false, "disable colour output")
+		strict  = fs.Bool("strict", false, "exit 2 when any Trust store Verdict fails")
 	)
 	if err := fs.Parse(args); err != nil {
 		if err == pflag.ErrHelp {
@@ -74,16 +78,31 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		targets = append(targets, t)
 	}
 
+	stores, err := truststore.Default(env)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
+		return 1
+	}
+
 	results := make([]scan.Result, 0, len(targets))
 	code := 0
+	verdictFailed := false
 	for _, t := range targets {
 		r := scan.Scan(context.Background(), t, opts)
 		if r.Err != nil {
 			code = 1
+		} else {
+			r.Verdicts = verify.Verify(r.Certs, r.Target.SNI, stores, time.Now())
+			for _, v := range r.Verdicts {
+				verdictFailed = verdictFailed || !v.Pass
+			}
 		}
 		results = append(results, r)
 	}
 	render.Pretty(stdout, results, useColor(stdout, env, *noColor))
+	if *strict && verdictFailed {
+		return 2
+	}
 	return code
 }
 

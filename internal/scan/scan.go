@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sollie/sslcheck/internal/verify"
 )
 
 // Target is a host, port and optional SNI name to scan.
@@ -96,7 +98,11 @@ type Result struct {
 	Target     Target
 	TLSVersion string
 	Chain      []Certificate
-	Err        error
+	// Certs is the Presented chain as parsed certificates, in the order received.
+	Certs []*x509.Certificate
+	// Verdicts holds one Verdict per Trust store; filled by the caller via verify.
+	Verdicts []verify.Verdict
+	Err      error
 }
 
 // Scan connects to t, completes the handshake without verifying it and
@@ -138,6 +144,7 @@ func Scan(ctx context.Context, t Target, opts Options) Result {
 	state := conn.(*tls.Conn).ConnectionState()
 	res.TLSVersion = tls.VersionName(state.Version)
 	for _, c := range state.PeerCertificates {
+		res.Certs = append(res.Certs, c)
 		res.Chain = append(res.Chain, describe(c, time.Now()))
 	}
 	return res

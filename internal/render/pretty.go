@@ -66,6 +66,7 @@ func Pretty(w io.Writer, results []scan.Result, useColor bool) {
 			field("Key", fmt.Sprintf("%s %d bits", c.KeyType, c.KeyBits))
 			field("SHA-256", c.SHA256)
 		}
+		writeVerdicts(w, p, r.Verdicts)
 	}
 }
 
