@@ -46,12 +46,14 @@ func updateEnv(t *testing.T, bundle []byte, checksum string) (env map[string]str
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ca/cacert.pem", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(bundle) })
 	mux.HandleFunc("/ca/cacert.pem.sha256", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(checksum)) })
+	mux.HandleFunc("/ct/log_list.json", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(embeddedLogList(t)) })
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	cache = t.TempDir()
 	return map[string]string{
-		"SSLCHECK_BUNDLE_URL": srv.URL + "/ca/cacert.pem",
-		"SSLCHECK_CACHE_DIR":  cache,
+		"SSLCHECK_BUNDLE_URL":      srv.URL + "/ca/cacert.pem",
+		"SSLCHECK_CT_LOG_LIST_URL": srv.URL + "/ct/log_list.json",
+		"SSLCHECK_CACHE_DIR":       cache,
 	}, cache
 }
 

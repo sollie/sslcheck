@@ -29,12 +29,18 @@ func StartTLS(t testing.TB, leaf *Cert, rest ...*Cert) *Server {
 // StartTLSStapled is StartTLS with staple as the stapled OCSP response.
 func StartTLSStapled(t testing.TB, staple []byte, leaf *Cert, rest ...*Cert) *Server {
 	t.Helper()
+	return StartTLSSCTs(t, staple, nil, leaf, rest...)
+}
+
+// StartTLSSCTs is StartTLSStapled that also sends scts in the TLS SCT extension.
+func StartTLSSCTs(t testing.TB, staple []byte, scts [][]byte, leaf *Cert, rest ...*Cert) *Server {
+	t.Helper()
 	chain := [][]byte{leaf.DER}
 	for _, c := range rest {
 		chain = append(chain, c.DER)
 	}
 	cfg := &tls.Config{
-		Certificates: []tls.Certificate{{Certificate: chain, PrivateKey: leaf.Key, OCSPStaple: staple}},
+		Certificates: []tls.Certificate{{Certificate: chain, PrivateKey: leaf.Key, OCSPStaple: staple, SignedCertificateTimestamps: scts}},
 		MinVersion:   tls.VersionTLS12,
 	}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)

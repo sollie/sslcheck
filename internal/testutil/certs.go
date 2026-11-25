@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"math/big"
 	"net"
@@ -38,6 +39,8 @@ type CertOpts struct {
 	// OCSPServer and CRLDistributionPoints are the revocation URLs embedded in the certificate.
 	OCSPServer            []string
 	CRLDistributionPoints []string
+	// CTLogs each sign an SCT embedded in the certificate. It needs an issuing CA.
+	CTLogs []*CTLog
 }
 
 // Expired returns o with a validity window that ended yesterday.
@@ -98,6 +101,24 @@ func build(t testing.TB, o CertOpts, isCA bool, parent *Cert) Cert {
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, signer, &key.PublicKey, signerKey)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(o.CTLogs) > 0 && parent != nil {
+		// The logs sign the TBSCertificate as it is without the SCT extension.
+		pre, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var scts [][]byte
+		for _, l := range o.CTLogs {
+			scts = append(scts, l.signPrecert(t, parent.Leaf.RawSubjectPublicKeyInfo, pre.RawTBSCertificate))
+		}
+		tmpl.ExtraExtensions = append(tmpl.ExtraExtensions, pkix.Extension{
+			Id:    asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 4, 2},
+			Value: SCTListExtension(t, scts...),
+		})
+		if der, err = x509.CreateCertificate(rand.Reader, tmpl, signer, &key.PublicKey, signerKey); err != nil {
+			t.Fatal(err)
+		}
 	}
 	leaf, err := x509.ParseCertificate(der)
 	if err != nil {

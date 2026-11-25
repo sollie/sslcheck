@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sollie/sslcheck/internal/ct"
 	"github.com/sollie/sslcheck/internal/revocation"
 	"github.com/sollie/sslcheck/internal/starttls"
 	"github.com/sollie/sslcheck/internal/verify"
@@ -83,6 +84,8 @@ type Options struct {
 	// Revocation enables live OCSP/CRL lookups; the stapled response is
 	// always checked.
 	Revocation bool
+	// CTLogs, when set, is the log list SCTs are verified against.
+	CTLogs *ct.LogList
 }
 
 // Certificate describes one certificate of the Presented chain.
@@ -112,7 +115,9 @@ type Result struct {
 	Verdicts []verify.Verdict `json:"verdicts,omitempty"`
 	// Revocation holds the Revocation status results; applied to Verdicts by the caller.
 	Revocation []revocation.Result `json:"-"`
-	Err        error               `json:"-"`
+	// CT holds the SCTs found and their verification; nil when no log list was given.
+	CT  *ct.Result `json:"-"`
+	Err error      `json:"-"`
 }
 
 // Scan connects to t, completes the handshake without verifying it and
@@ -190,6 +195,10 @@ func Scan(ctx context.Context, t Target, opts Options) Result {
 	rctx, rcancel := context.WithTimeout(parent, opts.Timeout)
 	defer rcancel()
 	res.Revocation = revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, time.Now())
+	if opts.CTLogs != nil {
+		r := ct.Verify(*opts.CTLogs, res.Certs, state.SignedCertificateTimestamps, state.OCSPResponse, time.Now())
+		res.CT = &r
+	}
 	return res
 }
 

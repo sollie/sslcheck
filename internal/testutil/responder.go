@@ -3,6 +3,8 @@ package testutil
 import (
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"io"
 	"math/big"
 	"net/http"
@@ -64,12 +66,14 @@ func (r *Responder) isRevoked(serial *big.Int) bool {
 	return r.revoked[serial.String()]
 }
 
-func (r *Responder) ocspResponse(serial *big.Int) []byte {
+func (r *Responder) ocspResponse(serial *big.Int, extra ...pkix.Extension) []byte {
 	tmpl := ocsp.Response{
 		Status:       ocsp.Good,
 		SerialNumber: serial,
 		ThisUpdate:   time.Now().Add(-time.Hour),
 		NextUpdate:   time.Now().Add(24 * time.Hour),
+
+		ExtraExtensions: extra,
 	}
 	if r.isRevoked(serial) {
 		tmpl.Status = ocsp.Revoked
@@ -84,6 +88,15 @@ func (r *Responder) ocspResponse(serial *big.Int) []byte {
 
 // Staple returns an OCSP response for c suitable for stapling, reflecting its current status.
 func (r *Responder) Staple(c *Cert) []byte { return r.ocspResponse(c.Leaf.SerialNumber) }
+
+// StapleWithSCTs is Staple with scts in the response's SCT extension.
+func (r *Responder) StapleWithSCTs(t testing.TB, c *Cert, scts ...[]byte) []byte {
+	t.Helper()
+	return r.ocspResponse(c.Leaf.SerialNumber, pkix.Extension{
+		Id:    asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 4, 5},
+		Value: SCTListExtension(t, scts...),
+	})
+}
 
 func (r *Responder) serveOCSP(w http.ResponseWriter, req *http.Request) {
 	r.hits.Add(1)

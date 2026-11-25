@@ -3,11 +3,12 @@ package render
 
 import (
 	"fmt"
-	"github.com/sollie/sslcheck/internal/revocation"
 	"io"
 	"strings"
 
 	"github.com/fatih/color"
+	"github.com/sollie/sslcheck/internal/ct"
+	"github.com/sollie/sslcheck/internal/revocation"
 	"github.com/sollie/sslcheck/internal/scan"
 )
 
@@ -81,6 +82,7 @@ func PrettyPEM(w io.Writer, results []scan.Result, useColor, withPEM bool) {
 				_, _ = fmt.Fprintf(w, "\n%s", c.PEM)
 			}
 		}
+		writeCT(w, p, r.CT)
 		writeVerdicts(w, p, r.Verdicts)
 	}
 }
@@ -104,4 +106,27 @@ func revocationText(p palette, rv revocation.Result) string {
 		return p.bad.Sprint(text)
 	}
 	return p.warn.Sprint(text)
+}
+
+func writeCT(w io.Writer, p palette, res *ct.Result) {
+	if res == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "\n%s\n", p.heading.Sprint("Certificate Transparency"))
+	count := fmt.Sprintf("%d SCTs, %d valid (log list: %s)", len(res.SCTs), res.Valid, res.LogList)
+	if res.Valid < ct.MinSCTs {
+		count = p.warn.Sprint(count)
+	}
+	_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprint("SCTs:"), count)
+	for _, s := range res.SCTs {
+		status := p.ok.Sprint("valid")
+		if !s.Valid {
+			status = p.warn.Sprintf("invalid: %s", s.Detail)
+		}
+		name := s.Log
+		if name == "" {
+			name = "unknown log"
+		}
+		_, _ = fmt.Fprintf(w, "    %s  %s (%s)  %s  %s\n", s.Timestamp.Format("2006-01-02 15:04:05 MST"), s.LogID, name, s.Source, status)
+	}
 }

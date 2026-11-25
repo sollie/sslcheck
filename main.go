@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mattn/go-isatty"
+	"github.com/sollie/sslcheck/internal/ct"
 	"github.com/sollie/sslcheck/internal/render"
 	"github.com/sollie/sslcheck/internal/scan"
 	"github.com/sollie/sslcheck/internal/starttls"
@@ -55,7 +57,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		revoc     = fs.Bool("revocation", false, "also query live OCSP (CRL when no OCSP URL) for every certificate except the root")
 		strict    = fs.Bool("strict", false, "exit 2 when any Trust store Verdict fails")
 		trustFile = fs.String("trust-store", "", "PEM file of root certificates to verify against, overriding the Mozilla and system stores")
-		update    = fs.Bool("update-trust-store", false, "download the latest Mozilla bundle into the cache directory and exit")
+		update    = fs.Bool("update-trust-store", false, "download the latest Mozilla bundle and CT log list into the cache directory and exit")
 		showVer   = fs.Bool("version", false, "print version and exit")
 	)
 	if err := fs.Parse(args); err != nil {
@@ -89,7 +91,12 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: unsupported --starttls protocol %q (want smtp, imap, pop3 or none)\n", *startTLS)
 		return 1
 	}
-	opts := scan.Options{Timeout: *timeout, SNI: *sni, Network: "tcp", StartTLS: *startTLS, Revocation: *revoc}
+	logList, err := ct.Load(env)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
+		return 1
+	}
+	opts := scan.Options{CTLogs: &logList, Timeout: *timeout, SNI: *sni, Network: "tcp", StartTLS: *startTLS, Revocation: *revoc}
 	if !slices.Contains(render.Formats, *format) {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: unknown format %q (want %s)\n", *format, strings.Join(render.Formats, ", "))
 		return 1
@@ -127,6 +134,9 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		} else {
 			r.Verdicts = verify.Verify(r.Certs, r.Target.SNI, stores, time.Now())
 			verify.ApplyRevocation(r.Verdicts, r.Revocation)
+			if r.CT != nil {
+				verify.ApplyCT(r.Verdicts, *r.CT)
+			}
 			for _, v := range r.Verdicts {
 				verdictFailed = verdictFailed || (!v.Pass && !v.Unavailable)
 			}
@@ -153,6 +163,17 @@ func updateData(stdout, stderr io.Writer, env map[string]string) int {
 	}
 	_, _ = fmt.Fprintf(stdout, "Trust store updated: %d certificates, dated %s, stored in %s\n",
 		res.Certificates, res.Date.UTC().Format(time.DateOnly), res.Path)
+	list, err := ct.Update(context.Background(), env, nil)
+	switch {
+	case errors.Is(err, ct.ErrNotNewer):
+		_, _ = fmt.Fprintln(stdout, "CT log list is already up to date")
+	case err != nil:
+		_, _ = fmt.Fprintf(stderr, "sslcheck: update CT log list: %v\n", err)
+		return 1
+	default:
+		_, _ = fmt.Fprintf(stdout, "CT log list updated: %d logs, dated %s, stored in %s\n",
+			list.Logs, list.Date.UTC().Format(time.DateOnly), list.Path)
+	}
 	return 0
 }
 

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/sollie/sslcheck/internal/ct"
 	"github.com/sollie/sslcheck/internal/revocation"
 	"github.com/sollie/sslcheck/internal/truststore"
 )
@@ -132,6 +133,28 @@ func verifyOne(chain []*x509.Certificate, name string, store truststore.Store, n
 		v.Findings = append(v.Findings, Finding{Warning, fmt.Sprintf("leaf certificate expires in %d days", days)})
 	}
 	return v
+}
+
+// ApplyCT adds a warning to every verdict when the SCTs found are missing,
+// too few or invalid. It never fails a Verdict.
+func ApplyCT(verdicts []Verdict, res ct.Result) {
+	var msgs []string
+	for _, s := range res.SCTs {
+		if !s.Valid {
+			msgs = append(msgs, fmt.Sprintf("SCT from %s (log %s) is not valid: %s", s.Source, s.LogID, s.Detail))
+		}
+	}
+	switch {
+	case len(res.SCTs) == 0:
+		msgs = append(msgs, "no SCTs presented (Certificate Transparency)")
+	case res.Valid < ct.MinSCTs:
+		msgs = append(msgs, fmt.Sprintf("only %d valid SCT(s) from distinct logs, expected at least %d", res.Valid, ct.MinSCTs))
+	}
+	for i := range verdicts {
+		for _, m := range msgs {
+			verdicts[i].Findings = append(verdicts[i].Findings, Finding{Warning, m})
+		}
+	}
 }
 
 // ApplyRevocation folds Revocation status results into verdicts: a revoked

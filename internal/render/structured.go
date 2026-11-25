@@ -29,6 +29,22 @@ type Result struct {
 	TLSVersion string        `json:"tls_version,omitempty" yaml:"tls_version,omitempty" toml:"tls_version,omitempty"`
 	Error      string        `json:"error,omitempty" yaml:"error,omitempty" toml:"error,omitempty"`
 	Chain      []Certificate `json:"chain,omitempty" yaml:"chain,omitempty" toml:"chain,omitempty"`
+	// SCTs lists every SCT found, with its verification outcome.
+	SCTs []SCT `json:"scts,omitempty" yaml:"scts,omitempty" toml:"scts,omitempty"`
+	// SCTCount is the number of SCTs found and SCTValid the number of distinct logs with a valid one.
+	SCTCount   int    `json:"sct_count" yaml:"sct_count" toml:"sct_count"`
+	SCTValid   int    `json:"sct_valid" yaml:"sct_valid" toml:"sct_valid"`
+	SCTLogList string `json:"sct_log_list,omitempty" yaml:"sct_log_list,omitempty" toml:"sct_log_list,omitempty"`
+}
+
+// SCT is one signed certificate timestamp.
+type SCT struct {
+	Source    string `json:"source" yaml:"source" toml:"source"`
+	LogID     string `json:"log_id" yaml:"log_id" toml:"log_id"`
+	Log       string `json:"log,omitempty" yaml:"log,omitempty" toml:"log,omitempty"`
+	Timestamp string `json:"timestamp,omitempty" yaml:"timestamp,omitempty" toml:"timestamp,omitempty"`
+	Valid     bool   `json:"valid" yaml:"valid" toml:"valid"`
+	Detail    string `json:"detail,omitempty" yaml:"detail,omitempty" toml:"detail,omitempty"`
 }
 
 // Certificate is one certificate of the Presented chain.
@@ -88,6 +104,16 @@ func NewReport(results []scan.Result, withPEM bool) Report {
 				}
 			}
 			out.Chain = append(out.Chain, cert)
+		}
+		if r.CT != nil {
+			out.SCTCount, out.SCTValid, out.SCTLogList = len(r.CT.SCTs), r.CT.Valid, r.CT.LogList
+			for _, s := range r.CT.SCTs {
+				ts := ""
+				if !s.Timestamp.IsZero() {
+					ts = s.Timestamp.UTC().Format(time.RFC3339)
+				}
+				out.SCTs = append(out.SCTs, SCT{Source: s.Source, LogID: s.LogID, Log: s.Log, Timestamp: ts, Valid: s.Valid, Detail: s.Detail})
+			}
 		}
 		rep.Results = append(rep.Results, out)
 	}

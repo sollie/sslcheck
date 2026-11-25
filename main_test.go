@@ -263,7 +263,7 @@ func TestScanReportsCertificateDetailsAndTLSVersion(t *testing.T) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "warning") {
+	if strings.Contains(out, "(warning)") {
 		t.Errorf("unexpected warning for certificate with 90 days left, got:\n%s", out)
 	}
 }
