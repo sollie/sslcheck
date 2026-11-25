@@ -15,5 +15,7 @@ Single-context: one root `GLOSSARY.md` plus `docs/adr/`. See `docs/agents/domain
 ## Workflow
 
 - One ticket = one branch = one PR. Dependent tickets are stacked on their blocker's branch (`gh stack`), so changes land as a stack of PRs. Independent tickets may be worked in parallel as side-stacks off the stack base. Use short-lived branches and PRs; never commit to `main` directly.
-- Before opening or updating a PR, run all of: `golangci-lint run`, `govulncheck ./...`, `go vet ./...`, `gofmt -l .` (must print nothing), `go test ./...`, and a code review of the changes (the `code-review` skill or agent). Fix findings before pushing.
+- A spec run (`/implement-spec`) uses one integration branch and one PR; `gh stack` applies to tickets worked by hand.
+- Before opening or updating a PR, run `tools/check.sh` (the pre-push hook does too; enable it with `git config core.hooksPath .githooks`) and a code review of the changes (the `code-review` skill or agent) against `CODING_STANDARDS.md`. Fix findings before pushing.
+- Releases: see `docs/releasing.md`.
 - Tests go through the single CLI seam (`run`); see issue #1.
