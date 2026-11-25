@@ -24,11 +24,12 @@ type Report struct {
 
 // Result is one Target's Scan.
 type Result struct {
-	Target     string        `json:"target" yaml:"target" toml:"target"`
-	SNI        string        `json:"sni,omitempty" yaml:"sni,omitempty" toml:"sni,omitempty"`
-	TLSVersion string        `json:"tls_version,omitempty" yaml:"tls_version,omitempty" toml:"tls_version,omitempty"`
-	Error      string        `json:"error,omitempty" yaml:"error,omitempty" toml:"error,omitempty"`
-	Chain      []Certificate `json:"chain,omitempty" yaml:"chain,omitempty" toml:"chain,omitempty"`
+	Target      string        `json:"target" yaml:"target" toml:"target"`
+	SNI         string        `json:"sni,omitempty" yaml:"sni,omitempty" toml:"sni,omitempty"`
+	TLSVersion  string        `json:"tls_version,omitempty" yaml:"tls_version,omitempty" toml:"tls_version,omitempty"`
+	CipherSuite string        `json:"cipher_suite,omitempty" yaml:"cipher_suite,omitempty" toml:"cipher_suite,omitempty"`
+	Error       string        `json:"error,omitempty" yaml:"error,omitempty" toml:"error,omitempty"`
+	Chain       []Certificate `json:"chain,omitempty" yaml:"chain,omitempty" toml:"chain,omitempty"`
 	// SCTs lists every SCT found, with its verification outcome.
 	SCTs []SCT `json:"scts,omitempty" yaml:"scts,omitempty" toml:"scts,omitempty"`
 	// Verdicts holds one Verdict per Trust store; absent when the scan failed.
@@ -101,7 +102,7 @@ type Revocation struct {
 func NewReport(results []scan.Result, withPEM bool) Report {
 	rep := Report{SchemaVersion: SchemaVersion, Results: make([]Result, 0, len(results))}
 	for _, r := range results {
-		out := Result{Target: r.Target.Address(), SNI: r.Target.SNI, TLSVersion: r.TLSVersion}
+		out := Result{Target: r.Target.Address(), SNI: r.Target.SNI, TLSVersion: r.TLSVersion, CipherSuite: r.CipherSuite}
 		if r.Err != nil {
 			out.Error = r.Err.Error()
 		}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -367,5 +368,41 @@ func TestPrettyWriteFailureIsReported(t *testing.T) {
 	code := run([]string{"--no-color", srv.Addr}, failingWriter{}, &errb, map[string]string{})
 	if code == 0 || !strings.Contains(errb.String(), "disk full") {
 		t.Errorf("exit %d, stderr: %q", code, errb.String())
+	}
+}
+
+func TestScanLegacyCipherSuiteIsReportedWithWarning(t *testing.T) {
+	root := testutil.NewCA(t, "Legacy Root")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "legacy.test", DNSNames: []string{"legacy.test"}, RSAKey: true})
+	srv := testutil.StartTLSCiphers(t, []uint16{tls.TLS_RSA_WITH_AES_128_CBC_SHA}, leaf, &root.Cert)
+
+	code, out, errs := runCLI(t, nil, "--no-color", srv.Addr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errs)
+	}
+	for _, want := range []string{"Cipher suite: TLS_RSA_WITH_AES_128_CBC_SHA", "weak cipher suite TLS_RSA_WITH_AES_128_CBC_SHA"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+
+	code, out, errs = runCLI(t, nil, "-f", "json", srv.Addr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errs)
+	}
+	rep := decode(t, "json", out)
+	if got := rep.Results[0].CipherSuite; got != "TLS_RSA_WITH_AES_128_CBC_SHA" {
+		t.Errorf("cipher_suite = %q", got)
+	}
+}
+
+func TestScanModernCipherSuiteIsReportedWithoutWarning(t *testing.T) {
+	root := testutil.NewCA(t, "Modern Root")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "modern.test", DNSNames: []string{"modern.test"}})
+	srv := testutil.StartTLS(t, leaf, &root.Cert)
+
+	_, out, _ := runCLI(t, nil, "--no-color", srv.Addr)
+	if !strings.Contains(out, "Cipher suite: TLS_") || strings.Contains(out, "weak cipher suite") {
+		t.Errorf("unexpected output:\n%s", out)
 	}
 }

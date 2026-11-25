@@ -201,6 +201,15 @@ func ApplyCT(verdicts []Verdict, res ct.Result) {
 	}
 }
 
+// ApplyWarning adds a warning Finding to every available Verdict.
+func ApplyWarning(verdicts []Verdict, msg string) {
+	for i := range verdicts {
+		if !verdicts[i].Unavailable {
+			verdicts[i].Findings = append(verdicts[i].Findings, Finding{Warning, msg})
+		}
+	}
+}
+
 // ApplyRevocation folds Revocation status results into verdicts: a revoked
 // certificate fails the Verdict, an unknown status only adds a warning.
 func ApplyRevocation(verdicts []Verdict, results []revocation.Result) {

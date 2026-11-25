@@ -35,13 +35,29 @@ func StartTLSStapled(t testing.TB, staple []byte, leaf *Cert, rest ...*Cert) *Se
 // StartTLSSCTs is StartTLSStapled that also sends scts in the TLS SCT extension.
 func StartTLSSCTs(t testing.TB, staple []byte, scts [][]byte, leaf *Cert, rest ...*Cert) *Server {
 	t.Helper()
+	return startTLS(t, nil, staple, scts, leaf, rest...)
+}
+
+// StartTLSCiphers is StartTLS limited to TLS 1.2 and the given cipher suites,
+// including ones Go does not offer by default.
+func StartTLSCiphers(t testing.TB, suites []uint16, leaf *Cert, rest ...*Cert) *Server {
+	t.Helper()
+	return startTLS(t, suites, nil, nil, leaf, rest...)
+}
+
+func startTLS(t testing.TB, suites []uint16, staple []byte, scts [][]byte, leaf *Cert, rest ...*Cert) *Server {
+	t.Helper()
 	chain := [][]byte{leaf.DER}
 	for _, c := range rest {
 		chain = append(chain, c.DER)
 	}
 	cfg := &tls.Config{
-		Certificates: []tls.Certificate{{Certificate: chain, PrivateKey: leaf.Key, OCSPStaple: staple, SignedCertificateTimestamps: scts}},
+		Certificates: []tls.Certificate{{Certificate: chain, PrivateKey: leaf.Signer(), OCSPStaple: staple, SignedCertificateTimestamps: scts}},
 		MinVersion:   tls.VersionTLS12,
+	}
+	if suites != nil {
+		cfg.CipherSuites = suites
+		cfg.MaxVersion = tls.VersionTLS12
 	}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
 	if err != nil {
