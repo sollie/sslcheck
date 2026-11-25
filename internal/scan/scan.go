@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sollie/sslcheck/internal/revocation"
 	"github.com/sollie/sslcheck/internal/starttls"
 	"github.com/sollie/sslcheck/internal/verify"
 )
@@ -79,6 +80,9 @@ type Options struct {
 	// StartTLS is "smtp", "imap" or "pop3" to upgrade in-band before the
 	// handshake, "none" to force implicit TLS, or "" to infer from the port.
 	StartTLS string
+	// Revocation enables live OCSP/CRL lookups; the stapled response is
+	// always checked.
+	Revocation bool
 }
 
 // Certificate describes one certificate of the Presented chain.
@@ -106,7 +110,9 @@ type Result struct {
 	Certs []*x509.Certificate `json:"-"`
 	// Verdicts holds one Verdict per Trust store; filled by the caller via verify.
 	Verdicts []verify.Verdict `json:"verdicts,omitempty"`
-	Err      error            `json:"-"`
+	// Revocation holds the Revocation status results; applied to Verdicts by the caller.
+	Revocation []revocation.Result `json:"-"`
+	Err        error               `json:"-"`
 }
 
 // Scan connects to t, completes the handshake without verifying it and
@@ -127,6 +133,7 @@ func Scan(ctx context.Context, t Target, opts Options) Result {
 	t.SNI = sni
 	res.Target = t
 
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 
@@ -179,6 +186,10 @@ func Scan(ctx context.Context, t Target, opts Options) Result {
 		res.Certs = append(res.Certs, c)
 		res.Chain = append(res.Chain, describe(c, time.Now()))
 	}
+	// Live lookups get their own --timeout budget; the staple needs no network.
+	rctx, rcancel := context.WithTimeout(parent, opts.Timeout)
+	defer rcancel()
+	res.Revocation = revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, time.Now())
 	return res
 }
 

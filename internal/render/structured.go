@@ -45,6 +45,15 @@ type Certificate struct {
 	KeyBits       int      `json:"key_bits" yaml:"key_bits" toml:"key_bits"`
 	SHA256        string   `json:"sha256_fingerprint" yaml:"sha256_fingerprint" toml:"sha256_fingerprint"`
 	PEM           string   `json:"pem,omitempty" yaml:"pem,omitempty" toml:"pem,omitempty"`
+	// Revocation lists the Revocation status results for this certificate.
+	Revocation []Revocation `json:"revocation,omitempty" yaml:"revocation,omitempty" toml:"revocation,omitempty"`
+}
+
+// Revocation is the Revocation status of a certificate from one source.
+type Revocation struct {
+	Status string `json:"status" yaml:"status" toml:"status"`
+	Source string `json:"source" yaml:"source" toml:"source"`
+	Detail string `json:"detail,omitempty" yaml:"detail,omitempty" toml:"detail,omitempty"`
 }
 
 // NewReport converts scan results into the structured model. PEM is only
@@ -56,7 +65,7 @@ func NewReport(results []scan.Result, withPEM bool) Report {
 		if r.Err != nil {
 			out.Error = r.Err.Error()
 		}
-		for _, c := range r.Chain {
+		for i, c := range r.Chain {
 			cert := Certificate{
 				Subject:       c.Subject,
 				SANs:          c.SANs,
@@ -72,6 +81,11 @@ func NewReport(results []scan.Result, withPEM bool) Report {
 			}
 			if withPEM {
 				cert.PEM = c.PEM
+			}
+			for _, rv := range r.Revocation {
+				if rv.Cert == i {
+					cert.Revocation = append(cert.Revocation, Revocation{Status: string(rv.Status), Source: string(rv.Source), Detail: rv.Detail})
+				}
 			}
 			out.Chain = append(out.Chain, cert)
 		}

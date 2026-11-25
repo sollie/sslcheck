@@ -23,12 +23,18 @@ func (s *Server) Close() { _ = s.ln.Close() }
 // in exactly that order. It is closed when the test ends.
 func StartTLS(t testing.TB, leaf *Cert, rest ...*Cert) *Server {
 	t.Helper()
+	return StartTLSStapled(t, nil, leaf, rest...)
+}
+
+// StartTLSStapled is StartTLS with staple as the stapled OCSP response.
+func StartTLSStapled(t testing.TB, staple []byte, leaf *Cert, rest ...*Cert) *Server {
+	t.Helper()
 	chain := [][]byte{leaf.DER}
 	for _, c := range rest {
 		chain = append(chain, c.DER)
 	}
 	cfg := &tls.Config{
-		Certificates: []tls.Certificate{{Certificate: chain, PrivateKey: leaf.Key}},
+		Certificates: []tls.Certificate{{Certificate: chain, PrivateKey: leaf.Key, OCSPStaple: staple}},
 		MinVersion:   tls.VersionTLS12,
 	}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
