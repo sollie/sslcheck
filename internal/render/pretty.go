@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	"github.com/fatih/color"
 	"github.com/sollie/sslcheck/internal/ct"
@@ -56,20 +57,74 @@ func newPalette(level ColorLevel) palette {
 }
 
 // Pretty writes a report for each result in the given order.
-func Pretty(w io.Writer, results []scan.Result, level ColorLevel) {
-	PrettyPEM(w, results, level, false)
+func Pretty(w io.Writer, results []scan.Result, level ColorLevel) error {
+	return PrettyPEM(w, results, level, false)
+}
+
+// errWriter remembers the first write error so rendering can report it once.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (e *errWriter) Write(b []byte) (int, error) {
+	if e.err != nil {
+		return 0, e.err
+	}
+	n, err := e.w.Write(b)
+	e.err = err
+	return n, err
+}
+
+// Safe escapes control and invisible characters in Target-derived text so they
+// show as \xNN, \uNNNN or \UNNNNNNNN instead of acting on the terminal.
+func Safe(s string) string {
+	if !strings.ContainsFunc(s, unsafeRune) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == unicode.ReplacementChar:
+			b.WriteString(`\ufffd`)
+		case !unsafeRune(r):
+			b.WriteRune(r)
+		case r < 0x100:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case r < 0x10000:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			fmt.Fprintf(&b, `\U%08x`, r)
+		}
+	}
+	return b.String()
+}
+
+func unsafeRune(r rune) bool {
+	return r == unicode.ReplacementChar || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) ||
+		unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r)
+}
+
+func safeAll(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = Safe(s)
+	}
+	return out
 }
 
 // PrettyPEM is Pretty, optionally followed by a PEM block per certificate.
-func PrettyPEM(w io.Writer, results []scan.Result, level ColorLevel, withPEM bool) {
+// It returns the first write error.
+func PrettyPEM(out io.Writer, results []scan.Result, level ColorLevel, withPEM bool) error {
+	w := &errWriter{w: out}
 	p := newPalette(level)
 	for i, r := range results {
 		if i > 0 {
 			_, _ = fmt.Fprintln(w)
 		}
-		_, _ = fmt.Fprintf(w, "%s\n", p.target.Sprintf("Target %s", r.Target.Address()))
+		_, _ = fmt.Fprintf(w, "%s\n", p.target.Sprintf("Target %s", Safe(r.Target.Address())))
 		if r.Err != nil {
-			_, _ = fmt.Fprintf(w, "  %s %v\n", p.bad.Sprint("Error:"), r.Err)
+			_, _ = fmt.Fprintf(w, "  %s %v\n", p.bad.Sprint("Error:"), Safe(r.Err.Error()))
 			continue
 		}
 		_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprint("TLS version:"), tlsVersion(p, r.TLSVersion))
@@ -78,11 +133,11 @@ func PrettyPEM(w io.Writer, results []scan.Result, level ColorLevel, withPEM boo
 			field := func(name, val string) {
 				_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprintf("%-14s", name+":"), val)
 			}
-			field("Subject", p.value.Sprint(c.Subject))
+			field("Subject", p.value.Sprint(Safe(c.Subject)))
 			if len(c.SANs) > 0 {
-				field("SANs", strings.Join(c.SANs, ", "))
+				field("SANs", strings.Join(safeAll(c.SANs), ", "))
 			}
-			field("Issuer", c.Issuer)
+			field("Issuer", Safe(c.Issuer))
 			field("Serial", p.dim.Sprint(c.Serial))
 			field("Not Before", c.NotBefore.UTC().Format("2006-01-02 15:04:05 MST"))
 			field("Not After", c.NotAfter.UTC().Format("2006-01-02 15:04:05 MST"))
@@ -100,6 +155,7 @@ func PrettyPEM(w io.Writer, results []scan.Result, level ColorLevel, withPEM boo
 		writeCT(w, p, r.CT)
 		writeVerdicts(w, p, r.Verdicts)
 	}
+	return w.err
 }
 
 // tlsVersion flags protocol versions older than TLS 1.2.
@@ -125,7 +181,7 @@ func expiry(p palette, c scan.Certificate) string {
 }
 
 func revocationText(p palette, rv revocation.Result) string {
-	text := fmt.Sprintf("%s (%s)", rv.Status, rv.Source)
+	text := fmt.Sprintf("%s (%s)", Safe(string(rv.Status)), Safe(string(rv.Source)))
 	switch rv.Status {
 	case revocation.Good:
 		return p.ok.Sprint(text)
@@ -140,7 +196,7 @@ func writeCT(w io.Writer, p palette, res *ct.Result) {
 		return
 	}
 	_, _ = fmt.Fprintf(w, "\n%s\n", p.heading.Sprint("Certificate Transparency"))
-	count := fmt.Sprintf("%d SCTs, %d valid (log list: %s)", len(res.SCTs), res.Valid, res.LogList)
+	count := fmt.Sprintf("%d SCTs, %d valid (log list: %s)", len(res.SCTs), res.Valid, Safe(res.LogList))
 	if res.Valid < ct.MinSCTs {
 		count = p.warn.Sprint(count)
 	}
@@ -148,12 +204,12 @@ func writeCT(w io.Writer, p palette, res *ct.Result) {
 	for _, s := range res.SCTs {
 		status := p.ok.Sprint("valid")
 		if !s.Valid {
-			status = p.warn.Sprintf("invalid: %s", s.Detail)
+			status = p.warn.Sprintf("invalid: %s", Safe(s.Detail))
 		}
-		name := s.Log
+		name := Safe(s.Log)
 		if name == "" {
 			name = "unknown log"
 		}
-		_, _ = fmt.Fprintf(w, "    %s  %s (%s)  %s  %s\n", s.Timestamp.Format("2006-01-02 15:04:05 MST"), s.LogID, name, s.Source, status)
+		_, _ = fmt.Fprintf(w, "    %s  %s (%s)  %s  %s\n", s.Timestamp.Format("2006-01-02 15:04:05 MST"), Safe(s.LogID), name, s.Source, status)
 	}
 }

@@ -176,3 +176,14 @@ func TestStructuredOutputCarriesVerdicts(t *testing.T) {
 		})
 	}
 }
+
+func TestFailedScanOmitsSCTCounts(t *testing.T) {
+	dead := testutil.StartTLS(t, testutil.SelfSigned(t, testutil.CertOpts{CommonName: "d.test"}))
+	addr := dead.Addr
+	dead.Close()
+
+	_, out, _ := runCLI(t, nil, "-f", "json", "--timeout", "2s", addr)
+	if strings.Contains(out, "sct_count") || strings.Contains(out, "sct_valid") {
+		t.Errorf("failed Scan reports SCT counts:\n%s", out)
+	}
+}
