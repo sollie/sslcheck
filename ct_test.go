@@ -190,3 +190,18 @@ func TestEmbeddedSCTsVerifyWithOutOfOrderChain(t *testing.T) {
 		t.Errorf("SCTs should verify; stderr %s:\n%s", errs, out)
 	}
 }
+
+func TestOutOfRangeSCTTimestampIsReportedInvalid(t *testing.T) {
+	root := testutil.NewCA(t, "Private Root")
+	log := testutil.NewCTLog(t, "Known Log")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "ct.test", DNSNames: []string{"ct.test"}})
+	srv := testutil.StartTLSSCTs(t, nil, [][]byte{log.SignX509AtMillis(t, leaf, 1<<63+5)}, leaf, &root.Cert)
+
+	code, out, errs := runCLI(t, ctEnv(t, log), "--no-color", "--sni", "ct.test", srv.Addr)
+	if code == 1 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	if !strings.Contains(out, "0 valid") || !strings.Contains(out, "timestamp") {
+		t.Errorf("wrapped timestamp should be invalid:\n%s", out)
+	}
+}

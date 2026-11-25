@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -55,10 +56,9 @@ func ParseTarget(s string) (Target, error) {
 		}
 		raw = u.Host
 	}
-	host, portStr, err := net.SplitHostPort(raw)
+	host, portStr, err := splitHostPort(raw)
 	if err != nil {
-		// No port: bare host, possibly a bracketed or bare IPv6 literal.
-		host, portStr = strings.Trim(raw, "[]"), ""
+		return Target{}, fmt.Errorf("invalid target %q: %w", s, err)
 	}
 	if host == "" {
 		return Target{}, fmt.Errorf("invalid target %q: missing host", s)
@@ -71,6 +71,40 @@ func ParseTarget(s string) (Target, error) {
 		}
 	}
 	return Target{Host: host, Port: port}, nil
+}
+
+// splitHostPort splits host[:port], accepting bracketed and bare IPv6 literals
+// and rejecting anything ambiguous or malformed.
+func splitHostPort(raw string) (host, port string, err error) {
+	if strings.HasPrefix(raw, "[") {
+		end := strings.Index(raw, "]")
+		if end < 0 {
+			return "", "", errors.New("missing closing bracket")
+		}
+		host, rest := raw[1:end], raw[end+1:]
+		if rest == "" {
+			return host, "", nil
+		}
+		port, ok := strings.CutPrefix(rest, ":")
+		if !ok || port == "" {
+			return "", "", errors.New("malformed port")
+		}
+		return host, port, nil
+	}
+	if ip := net.ParseIP(raw); ip != nil {
+		return raw, "", nil
+	}
+	if strings.ContainsAny(raw, "[]") {
+		return "", "", errors.New("unexpected bracket")
+	}
+	host, port, found := strings.Cut(raw, ":")
+	if !found {
+		return raw, "", nil
+	}
+	if port == "" || strings.Contains(port, ":") {
+		return "", "", errors.New("malformed port")
+	}
+	return host, port, nil
 }
 
 // Options control how a Scan connects.

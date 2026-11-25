@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -451,5 +453,44 @@ func TestCancelDuringSTARTTLSDoesNotWaitForTimeout(t *testing.T) {
 	}
 	if code != 1 || !json.Valid([]byte(out)) {
 		t.Errorf("exit %d, output %q", code, out)
+	}
+}
+
+func TestTimeoutMustBePositive(t *testing.T) {
+	for _, v := range []string{"0", "0s", "-1s"} {
+		code, _, errs := runCLI(t, nil, "--timeout="+v, "example.com")
+		if code != 1 || !strings.Contains(errs, "--timeout") {
+			t.Errorf("--timeout=%s: exit %d, stderr %q; want 1 naming --timeout", v, code, errs)
+		}
+	}
+}
+
+func TestMalformedTargetsAreUsageErrors(t *testing.T) {
+	for _, target := range []string{"host:1:2", "[::1", "host:", "[::1]:", "::1]"} {
+		code, out, errs := runCLI(t, nil, target)
+		if code != 1 || !strings.Contains(errs, "invalid target") || out != "" {
+			t.Errorf("%q: exit %d, stdout %q, stderr %q; want usage error", target, code, out, errs)
+		}
+	}
+}
+
+func TestValidTargetFormsStillParse(t *testing.T) {
+	for _, target := range []string{"[::1]:8443", "::1", "[::1]", "https://[::1]:8443"} {
+		_, _, errs := runCLI(t, nil, "--timeout=1ms", target)
+		if strings.Contains(errs, "invalid target") {
+			t.Errorf("%q rejected: %s", target, errs)
+		}
+	}
+}
+
+func TestBadFormatIsReportedEvenWhenDataIsBroken(t *testing.T) {
+	broken := filepath.Join(t.TempDir(), "broken.json")
+	if err := os.WriteFile(broken, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"SSLCHECK_CT_LOG_LIST": broken}
+	code, _, errs := runCLI(t, env, "--format", "xml", "example.com")
+	if code != 1 || !strings.Contains(errs, "unknown format") {
+		t.Errorf("exit %d, stderr %q; want unknown format error", code, errs)
 	}
 }

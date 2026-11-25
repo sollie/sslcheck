@@ -38,14 +38,48 @@ func main() {
 	os.Exit(code)
 }
 
+// config is the validated result of parsing the command line.
+type config struct {
+	showVersion bool
+	update      bool
+	format      string
+	pem         bool
+	noColor     bool
+	strict      bool
+	trustFile   string
+	targets     []scan.Target
+	opts        scan.Options // everything except CTLogs and Stores, which need data
+}
+
 // run is the testable entry point. It returns the process exit code:
 // 0 when every Scan completed, 1 for connection and usage errors, and 2 when
 // --strict is given and any Verdict fails.
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, env map[string]string) int {
+	cfg, err := parseConfig(args, stderr)
+	switch {
+	case errors.Is(err, pflag.ErrHelp):
+		return 0
+	case err != nil:
+		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
+		return 1
+	}
+	if cfg.showVersion {
+		_, _ = fmt.Fprintf(stdout, "sslcheck %s\n", version)
+		return 0
+	}
+	if cfg.update {
+		return updateData(ctx, stdout, stderr, env)
+	}
+	return execute(ctx, cfg, stdout, stderr, env)
+}
+
+// parseConfig parses and validates args without loading any data; usage text
+// goes to w.
+func parseConfig(args []string, w io.Writer) (config, error) {
 	fs := pflag.NewFlagSet("sslcheck", pflag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(w)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "Usage: sslcheck [flags] <host | host:port | https://host[:port]>...")
+		_, _ = fmt.Fprintln(w, "Usage: sslcheck [flags] <host | host:port | https://host[:port]>...")
 		fs.PrintDefaults()
 	}
 	var (
@@ -66,72 +100,71 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env map[s
 		showVer   = fs.Bool("version", false, "print version and exit")
 	)
 	if err := fs.Parse(args); err != nil {
-		if err == pflag.ErrHelp {
-			return 0
-		}
-		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
-		return 1
+		return config{}, err
 	}
-	if *showVer {
-		_, _ = fmt.Fprintf(stdout, "sslcheck %s\n", version)
-		return 0
-	}
-	if *update {
-		return updateData(ctx, stdout, stderr, env)
+	if *showVer || *update {
+		return config{showVersion: *showVer, update: *update}, nil
 	}
 	if fs.NArg() == 0 {
-		_, _ = fmt.Fprintln(stderr, "sslcheck: no target given")
 		fs.Usage()
-		return 1
+		return config{}, errors.New("no target given")
 	}
 	if *ipv4 && *ipv6 {
-		_, _ = fmt.Fprintln(stderr, "sslcheck: --ipv4 and --ipv6 are mutually exclusive")
-		return 1
+		return config{}, errors.New("--ipv4 and --ipv6 are mutually exclusive")
 	}
 	if *conc < 1 {
-		_, _ = fmt.Fprintln(stderr, "sslcheck: --concurrency must be at least 1")
-		return 1
+		return config{}, errors.New("--concurrency must be at least 1")
+	}
+	if *timeout <= 0 {
+		return config{}, errors.New("--timeout must be positive")
 	}
 	if !starttls.Valid(*startTLS) {
-		_, _ = fmt.Fprintf(stderr, "sslcheck: unsupported --starttls protocol %q (want smtp, imap, pop3 or none)\n", *startTLS)
-		return 1
+		return config{}, fmt.Errorf("unsupported --starttls protocol %q (want smtp, imap, pop3 or none)", *startTLS)
 	}
+	if !slices.Contains(render.Formats, *format) {
+		return config{}, fmt.Errorf("unknown format %q (want %s)", *format, strings.Join(render.Formats, ", "))
+	}
+	network := "tcp"
+	if *ipv4 {
+		network = "tcp4"
+	}
+	if *ipv6 {
+		network = "tcp6"
+	}
+	targets := make([]scan.Target, 0, fs.NArg())
+	for _, a := range fs.Args() {
+		t, err := scan.ParseTarget(a)
+		if err != nil {
+			return config{}, err
+		}
+		targets = append(targets, t)
+	}
+	return config{
+		format: *format, pem: *withPEM, noColor: *noColor, strict: *strict, trustFile: *trustFile,
+		targets: targets,
+		opts: scan.Options{
+			Timeout: *timeout, SNI: *sni, Network: network, StartTLS: *startTLS,
+			Revocation: *revoc, AllowPrivateRevocation: *privRev, Concurrency: *conc,
+		},
+	}, nil
+}
+
+// execute loads data, scans every Target and prints the Report.
+func execute(ctx context.Context, cfg config, stdout, stderr io.Writer, env map[string]string) int {
 	logList, err := ct.Load(env)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
 		return 1
 	}
-	opts := scan.Options{CTLogs: &logList, Timeout: *timeout, SNI: *sni, Network: "tcp", StartTLS: *startTLS, Revocation: *revoc, AllowPrivateRevocation: *privRev}
-	if !slices.Contains(render.Formats, *format) {
-		_, _ = fmt.Fprintf(stderr, "sslcheck: unknown format %q (want %s)\n", *format, strings.Join(render.Formats, ", "))
-		return 1
-	}
-	if *ipv4 {
-		opts.Network = "tcp4"
-	}
-	if *ipv6 {
-		opts.Network = "tcp6"
-	}
-
-	targets := make([]scan.Target, 0, fs.NArg())
-	for _, a := range fs.Args() {
-		t, err := scan.ParseTarget(a)
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
-			return 1
-		}
-		targets = append(targets, t)
-	}
-
-	stores, err := truststore.Default(env, *trustFile)
+	stores, err := truststore.Default(env, cfg.trustFile)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
 		return 1
 	}
-
+	opts := cfg.opts
+	opts.CTLogs = &logList
 	opts.Stores = stores
-	opts.Concurrency = *conc
-	results := scan.ScanAll(ctx, targets, opts)
+	results := scan.ScanAll(ctx, cfg.targets, opts)
 	code := 0
 	verdictFailed := false
 	for _, r := range results {
@@ -141,16 +174,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env map[s
 		verdictFailed = verdictFailed || r.Failed()
 	}
 	var werr error
-	if *format == "pretty" {
-		werr = render.PrettyPEM(stdout, results, colorLevel(stdout, env, *noColor), *withPEM)
+	if cfg.format == "pretty" {
+		werr = render.PrettyPEM(stdout, results, colorLevel(stdout, env, cfg.noColor), cfg.pem)
 	} else {
-		werr = render.Structured(stdout, render.NewReport(results, *withPEM), *format)
+		werr = render.Structured(stdout, render.NewReport(results, cfg.pem), cfg.format)
 	}
 	if werr != nil {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", werr)
 		return 1
 	}
-	if *strict && verdictFailed {
+	if cfg.strict && verdictFailed {
 		return 2
 	}
 	return code
