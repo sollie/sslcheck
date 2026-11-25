@@ -43,7 +43,7 @@ type Certificate struct {
 	SigAlgorithm  string   `json:"signature_algorithm" yaml:"signature_algorithm" toml:"signature_algorithm"`
 	KeyType       string   `json:"key_type" yaml:"key_type" toml:"key_type"`
 	KeyBits       int      `json:"key_bits" yaml:"key_bits" toml:"key_bits"`
-	SHA256        string   `json:"sha256" yaml:"sha256" toml:"sha256"`
+	SHA256        string   `json:"sha256_fingerprint" yaml:"sha256_fingerprint" toml:"sha256_fingerprint"`
 	PEM           string   `json:"pem,omitempty" yaml:"pem,omitempty" toml:"pem,omitempty"`
 }
 
