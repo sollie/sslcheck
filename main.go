@@ -158,7 +158,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env map[s
 
 // updateData implements --update-trust-store.
 func updateData(ctx context.Context, stdout, stderr io.Writer, env map[string]string) int {
-	res, err := truststore.Update(ctx, env, truststore.HTTPClient())
+	client := truststore.HTTPClient(env)
+	res, err := truststore.Update(ctx, env, client)
 	switch {
 	case errors.Is(err, refresh.ErrNotNewer):
 		_, _ = fmt.Fprintln(stdout, "Trust store is already up to date")
@@ -169,7 +170,7 @@ func updateData(ctx context.Context, stdout, stderr io.Writer, env map[string]st
 		_, _ = fmt.Fprintf(stdout, "Trust store updated: %d certificates, dated %s, stored in %s\n",
 			res.Count, res.Date.UTC().Format(time.DateOnly), res.Path)
 	}
-	list, err := ct.Update(ctx, env, truststore.HTTPClient())
+	list, err := ct.Update(ctx, env, client)
 	switch {
 	case errors.Is(err, refresh.ErrNotNewer):
 		_, _ = fmt.Fprintln(stdout, "CT log list is already up to date")

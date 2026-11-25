@@ -22,8 +22,8 @@ const EnvCacheDir = "SSLCHECK_CACHE_DIR"
 const maxDownload = 16 << 20
 
 // ErrNotNewer is returned by Update when the published copy is no newer than
-// the embedded one.
-var ErrNotNewer = errors.New("is not newer than the embedded copy")
+// the newest valid installed copy (cached or embedded).
+var ErrNotNewer = errors.New("is not newer than the installed copy")
 
 // Info is what an adapter learns from parsing a dataset.
 type Info struct {
@@ -70,7 +70,8 @@ func CacheDir(env map[string]string) (string, error) {
 	return filepath.Join(base, "sslcheck"), nil
 }
 
-// Update downloads ds, validates it and stores it in CacheDir. On any failure
+// Update downloads ds, validates it and stores it in CacheDir unless it is not
+// newer than the best installed copy. On any failure
 // nothing is written and an existing cached copy is left untouched. A nil
 // client uses http.DefaultClient.
 func Update(ctx context.Context, env map[string]string, client *http.Client, ds Dataset) (Result, error) {
@@ -94,15 +95,21 @@ func Update(ctx context.Context, env map[string]string, client *http.Client, ds 
 	if err != nil {
 		return Result{}, fmt.Errorf("downloaded %s rejected: %w", ds.Name, err)
 	}
-	if !info.Date.After(ds.EmbeddedDate) {
-		return Result{}, fmt.Errorf("%s %w: downloaded is %s, embedded is %s", ds.Name, ErrNotNewer,
-			info.Date.UTC().Format(time.DateOnly), ds.EmbeddedDate.UTC().Format(time.DateOnly))
-	}
 	dir, err := CacheDir(env)
 	if err != nil {
 		return Result{}, err
 	}
 	path := filepath.Join(dir, ds.File)
+	best, source := ds.EmbeddedDate, "embedded"
+	if cached, err := os.ReadFile(path); err == nil { //nolint:gosec // path is under the cache dir
+		if ci, err := ds.Parse(cached); err == nil && ci.Date.After(best) {
+			best, source = ci.Date, "cached"
+		}
+	}
+	if !info.Date.After(best) {
+		return Result{}, fmt.Errorf("%s %w: downloaded is %s, %s is %s", ds.Name, ErrNotNewer,
+			info.Date.UTC().Format(time.DateOnly), source, best.UTC().Format(time.DateOnly))
+	}
 	if err := WriteFileAtomic(path, data); err != nil {
 		return Result{}, err
 	}

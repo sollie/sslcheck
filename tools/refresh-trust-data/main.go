@@ -49,7 +49,7 @@ func run() error {
 	}
 	ctx := context.Background()
 
-	switch res, err := truststore.Update(ctx, env, truststore.HTTPClient()); {
+	switch res, err := truststore.Update(ctx, env, truststore.HTTPClient(env)); {
 	case errors.Is(err, refresh.ErrNotNewer):
 		fmt.Println("trust store: already up to date")
 	case err != nil:
@@ -61,7 +61,7 @@ func run() error {
 		fmt.Printf("trust store: updated to %s (%d certificates)\n", res.Date.UTC().Format("2006-01-02"), res.Count)
 	}
 
-	switch res, err := ct.Update(ctx, env, truststore.HTTPClient()); {
+	switch res, err := ct.Update(ctx, env, truststore.HTTPClient(env)); {
 	case errors.Is(err, refresh.ErrNotNewer):
 		fmt.Println("CT log list: already up to date")
 	case err != nil:

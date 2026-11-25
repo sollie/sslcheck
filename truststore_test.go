@@ -2,24 +2,52 @@ package main
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sollie/sslcheck/internal/testutil"
 )
 
 const (
-	newerDateLine = "## Certificate data from Mozilla as of: Fri Dec  4 04:12:01 2099 GMT"
-	olderDateLine = "## Certificate data from Mozilla as of: Mon Jan  5 04:12:01 2026 GMT"
+	newerDateLine  = "## Certificate data from Mozilla as of: Fri Dec  4 04:12:01 2099 GMT"
+	middleDateLine = "## Certificate data from Mozilla as of: Wed Jun  3 04:12:01 2098 GMT"
 )
 
 var dateLineRE = regexp.MustCompile(`(?m)^## Certificate data from Mozilla as of:.*$`)
+
+// embeddedBundleDate reads the date of the checked-in bundle so tests keep
+// passing when the weekly refresh changes it.
+func embeddedBundleDate(t *testing.T) time.Time {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("internal", "truststore", "cacert.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := dateLineRE.Find(data)
+	if line == nil {
+		t.Fatal("checked-in bundle has no date line")
+	}
+	_, value, _ := strings.Cut(string(line), "as of: ")
+	d, err := time.Parse("Mon Jan _2 15:04:05 2006 MST", value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func dateLine(d time.Time) string {
+	return "## Certificate data from Mozilla as of: " + d.UTC().Format("Mon Jan _2 15:04:05 2006 MST")
+}
 
 // bundleWith returns the embedded bundle with the given date line and extra roots appended.
 func bundleWith(t *testing.T, dateLine string, extra ...*testutil.CA) []byte {
@@ -68,7 +96,7 @@ func TestEmbeddedBundleSourceAndDateAreReported(t *testing.T) {
 	srv := privateServer(t, root)
 	env := map[string]string{"SSLCHECK_CACHE_DIR": t.TempDir()}
 	_, out, _ := runCLI(t, env, "--no-color", "--sni", "ok.test", srv.Addr)
-	if !strings.Contains(out, "embedded") || !strings.Contains(out, "2026-11-05") {
+	if !strings.Contains(out, "embedded") || !strings.Contains(out, embeddedBundleDate(t).Format(time.DateOnly)) {
 		t.Errorf("report should name embedded source and date:\n%s", out)
 	}
 }
@@ -134,8 +162,8 @@ func TestUpdateRejectsBadBundlesAndStoresNothing(t *testing.T) {
 
 func TestUpdateWithBundleNotNewerStillRefreshesCTAndExitsZero(t *testing.T) {
 	for name, line := range map[string]string{
-		"same":  "## Certificate data from Mozilla as of: Thu Nov  5 04:12:01 2026 GMT",
-		"older": olderDateLine,
+		"same":  dateLine(embeddedBundleDate(t)),
+		"older": dateLine(embeddedBundleDate(t).AddDate(0, 0, -30)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			bundle := bundleWith(t, line)
@@ -182,7 +210,7 @@ func TestOlderCachedBundleLosesToEmbedded(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "cacert.pem"), bundleWith(t, olderDateLine, root), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "cacert.pem"), bundleWith(t, dateLine(embeddedBundleDate(t).AddDate(0, 0, -30)), root), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, out, _ := runCLI(t, map[string]string{"SSLCHECK_CACHE_DIR": cache}, "--no-color", "--sni", "ok.test", srv.Addr)
@@ -227,5 +255,68 @@ func TestExplicitTrustStoreErrorsExitOne(t *testing.T) {
 		if code, _, errs := runCLI(t, nil, "--trust-store", p, "localhost:1"); code != 1 || !strings.Contains(errs, "trust store") {
 			t.Errorf("%s: exit %d, stderr %q", p, code, errs)
 		}
+	}
+}
+
+func TestUpdateKeepsCachedBundleNewerThanDownloadAndEqualIsNotReinstalled(t *testing.T) {
+	newer := bundleWith(t, newerDateLine)
+	env, cache := updateEnv(t, newer, sum(newer))
+	if code, _, errs := runCLI(t, env, "--update-trust-store"); code != 0 {
+		t.Fatalf("update: %s", errs)
+	}
+	path := filepath.Join(cache, "sslcheck", "cacert.pem")
+	// Past the embedded date but older than the cache.
+	for name, offered := range map[string][]byte{
+		"older than cache": bundleWith(t, middleDateLine),
+		"equal to cache":   bundleWith(t, newerDateLine, testutil.NewCA(t, "Extra Root")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			env2, _ := updateEnv(t, offered, sum(offered))
+			env2["SSLCHECK_CACHE_DIR"] = cache
+			code, out, errs := runCLI(t, env2, "--update-trust-store")
+			if code != 0 || !strings.Contains(out, "Trust store is already up to date") {
+				t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errs)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(newer) {
+				t.Errorf("cached bundle should be preserved (err %v)", err)
+			}
+		})
+	}
+}
+
+func TestUpdateRefusesHTTPSToHTTPRedirect(t *testing.T) {
+	var plainHits atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		plainHits.Add(1)
+		_, _ = w.Write(bundleWith(t, newerDateLine))
+	}))
+	t.Cleanup(plain.Close)
+
+	root := testutil.NewCA(t, "Mirror Root")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "mirror.test", IPs: []net.IP{net.IPv4(127, 0, 0, 1)}})
+	secure := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/ca/cacert.pem", http.StatusFound)
+	}))
+	secure.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{leaf.DER}, PrivateKey: leaf.Signer()}}, MinVersion: tls.VersionTLS12}
+	secure.StartTLS()
+	t.Cleanup(secure.Close)
+
+	caFile := filepath.Join(t.TempDir(), "mirror.pem")
+	if err := os.WriteFile(caFile, root.PEM(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cache := t.TempDir()
+	env := map[string]string{
+		"SSLCHECK_BUNDLE_URL": secure.URL + "/ca/cacert.pem",
+		"SSL_CERT_FILE":       caFile,
+		"SSLCHECK_CACHE_DIR":  cache,
+	}
+	code, _, errs := runCLI(t, env, "--update-trust-store")
+	if code != 1 || !strings.Contains(errs, "redirect") {
+		t.Errorf("exit %d, stderr %q; want exit 1 mentioning the refused redirect", code, errs)
+	}
+	if plainHits.Load() != 0 {
+		t.Error("the cleartext server must never be contacted")
 	}
 }
