@@ -231,15 +231,21 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 		res.Certs = append(res.Certs, c)
 		res.Chain = append(res.Chain, describe(c, now()))
 	}
+	var roots []*x509.CertPool
+	for _, s := range opts.Stores {
+		if !s.Unavailable {
+			roots = append(roots, s.Roots)
+		}
+	}
 	// Live lookups get their own --timeout budget; the staple needs no network.
 	rctx, rcancel := context.WithTimeout(parent, opts.Timeout)
 	defer rcancel()
-	revs := revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, now())
+	revs := revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, roots, now())
 	for _, rv := range revs {
 		res.Chain[rv.Cert].Revocation = append(res.Chain[rv.Cert].Revocation, rv)
 	}
 	if opts.CTLogs != nil {
-		r := ct.Verify(*opts.CTLogs, res.Certs, state.SignedCertificateTimestamps, state.OCSPResponse, now())
+		r := ct.Verify(*opts.CTLogs, res.Certs, roots, state.SignedCertificateTimestamps, state.OCSPResponse, now())
 		res.CT = &r
 	}
 	res.Verdicts = verify.Verify(res.Certs, t.SNI, opts.Stores, now())

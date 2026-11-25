@@ -39,6 +39,8 @@ type CertOpts struct {
 	// OCSPServer and CRLDistributionPoints are the revocation URLs embedded in the certificate.
 	OCSPServer            []string
 	CRLDistributionPoints []string
+	// ExtKeyUsage overrides the default extended key usage of a leaf certificate.
+	ExtKeyUsage []x509.ExtKeyUsage
 	// CTLogs each sign an SCT embedded in the certificate. It needs an issuing CA.
 	CTLogs []*CTLog
 }
@@ -93,6 +95,9 @@ func build(t testing.TB, o CertOpts, isCA bool, parent *Cert) Cert {
 	} else {
 		tmpl.KeyUsage = x509.KeyUsageDigitalSignature
 		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+		if o.ExtKeyUsage != nil {
+			tmpl.ExtKeyUsage = o.ExtKeyUsage
+		}
 	}
 	signer, signerKey := tmpl, key
 	if parent != nil {

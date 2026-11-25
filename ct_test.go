@@ -177,3 +177,16 @@ func TestBadLogListUpdateFailsAndStoresNothing(t *testing.T) {
 		t.Error("rejected list must not be stored")
 	}
 }
+
+func TestEmbeddedSCTsVerifyWithOutOfOrderChain(t *testing.T) {
+	root := testutil.NewCA(t, "Private Root")
+	inter := root.NewIntermediate(t, "Private Intermediate")
+	a, b := testutil.NewCTLog(t, "Fake Log A"), testutil.NewCTLog(t, "Fake Log B")
+	leaf := inter.Issue(t, testutil.CertOpts{CommonName: "ct.test", DNSNames: []string{"ct.test"}, CTLogs: []*testutil.CTLog{a, b}})
+	srv := testutil.StartTLS(t, leaf, &root.Cert, &inter.Cert)
+
+	_, out, errs := runCLI(t, ctEnv(t, a, b), "--no-color", "--trust-store", trustFile(t, root), "--sni", "ct.test", srv.Addr)
+	if !strings.Contains(out, "2 SCTs, 2 valid") {
+		t.Errorf("SCTs should verify; stderr %s:\n%s", errs, out)
+	}
+}
