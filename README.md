@@ -5,6 +5,8 @@ certificates they present. A scan always completes and reports, even when the
 chain is expired, self-signed or untrusted. See [GLOSSARY.md](GLOSSARY.md) for
 the terms used below.
 
+![sslcheck scanning cloudflare.com](docs/images/sslcheck.png)
+
 ## Install
 
 ```sh
