@@ -1,0 +1,40 @@
+name: Refresh trust data
+
+on:
+  schedule:
+    - cron: "43 5 * * 1"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    name: Refresh embedded trust data
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      # Same validation as sslcheck --update-trust-store; leaves files alone when nothing is newer.
+      - name: refresh
+        run: go run ./tools/refresh-trust-data
+
+      - name: test
+        run: go test ./...
+
+      - uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
+        with:
+          branch: automation/refresh-trust-data
+          add-paths: |
+            internal/truststore/cacert.pem
+            internal/ct/log_list.json
+          commit-message: "chore: refresh embedded trust data"
+          title: "chore: refresh embedded trust data"
+          body: |
+            Automated weekly refresh of the embedded Mozilla CA bundle and Certificate Transparency log list.
+            Both were validated like `sslcheck --update-trust-store` and `go test ./...` passed.
+          delete-branch: true

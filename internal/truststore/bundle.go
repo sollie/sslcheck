@@ -35,6 +35,10 @@ const (
 	maxDownload = 16 << 20
 )
 
+// ErrNotNewer is returned by Update when the published bundle is no newer than
+// the embedded one.
+var ErrNotNewer = errors.New("trust store bundle is not newer than the embedded one")
+
 var dateRE = regexp.MustCompile(`(?m)^## Certificate data from Mozilla as of:\s*(.+?)\s*$`)
 
 // CacheDir returns the directory sslcheck keeps downloaded data in: the OS
@@ -149,7 +153,7 @@ func Update(ctx context.Context, env map[string]string, client *http.Client) (Up
 		return UpdateResult{}, err
 	}
 	if !b.date.After(emb.Date) {
-		return UpdateResult{}, fmt.Errorf("downloaded bundle (%s) is not newer than the embedded one (%s)",
+		return UpdateResult{}, fmt.Errorf("%w: downloaded bundle is %s, embedded is %s", ErrNotNewer,
 			b.date.UTC().Format(time.DateOnly), emb.Date.UTC().Format(time.DateOnly))
 	}
 	dir, err := CacheDir(env)
