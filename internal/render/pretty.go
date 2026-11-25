@@ -19,9 +19,9 @@ type palette struct {
 	heading, target, label, value, dim, ok, warn, bad *color.Color
 }
 
+// newPalette uses 24-bit colour: sslcheck only targets modern terminals.
 func newPalette(useColor bool) palette {
-	mk := func(a ...color.Attribute) *color.Color {
-		c := color.New(a...)
+	set := func(c *color.Color) *color.Color {
 		if useColor {
 			c.EnableColor()
 		} else {
@@ -29,15 +29,18 @@ func newPalette(useColor bool) palette {
 		}
 		return c
 	}
+	rgb := func(r, g, b int, a ...color.Attribute) *color.Color {
+		return set(color.RGB(r, g, b).Add(a...))
+	}
 	return palette{
-		heading: mk(color.Bold, color.FgHiCyan),
-		target:  mk(color.Bold, color.FgHiMagenta),
-		label:   mk(color.Bold, color.FgHiBlue),
-		value:   mk(color.Bold, color.FgHiWhite),
-		dim:     mk(color.Faint),
-		ok:      mk(color.FgHiGreen),
-		warn:    mk(color.FgHiYellow),
-		bad:     mk(color.FgHiRed),
+		heading: rgb(34, 211, 238, color.Bold),
+		target:  rgb(232, 121, 249, color.Bold),
+		label:   rgb(96, 165, 250, color.Bold),
+		value:   rgb(248, 250, 252, color.Bold),
+		dim:     set(color.New(color.Faint)),
+		ok:      rgb(74, 222, 128),
+		warn:    rgb(251, 191, 36),
+		bad:     rgb(248, 113, 113),
 	}
 }
 
