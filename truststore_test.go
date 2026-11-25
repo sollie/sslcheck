@@ -196,7 +196,7 @@ func TestRejectedUpdateKeepsPreviousCachedBundle(t *testing.T) {
 	if code, _, _ := runCLI(t, bad, "--update-trust-store"); code != 1 {
 		t.Fatalf("bad update should fail")
 	}
-	got, err := os.ReadFile(filepath.Join(cache, "sslcheck", "cacert.pem"))
+	got, err := os.ReadFile(filepath.Join(cache, "sslcheck", "cacert.pem")) //nolint:gosec // test reads a path under t.TempDir()
 	if err != nil || string(got) != string(good) {
 		t.Errorf("previous bundle should be intact (err %v)", err)
 	}
@@ -277,7 +277,7 @@ func TestUpdateKeepsCachedBundleNewerThanDownloadAndEqualIsNotReinstalled(t *tes
 			if code != 0 || !strings.Contains(out, "Trust store is already up to date") {
 				t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errs)
 			}
-			got, err := os.ReadFile(path)
+			got, err := os.ReadFile(path) //nolint:gosec // test reads a path under t.TempDir()
 			if err != nil || string(got) != string(newer) {
 				t.Errorf("cached bundle should be preserved (err %v)", err)
 			}
