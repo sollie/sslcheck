@@ -3,10 +3,13 @@
 package verify
 
 import (
+	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/sollie/sslcheck/internal/ct"
@@ -176,9 +179,9 @@ func validityMidpoint(chain []*x509.Certificate) time.Time {
 	return from.Add(to.Sub(from) / 2)
 }
 
-// ApplyCT adds a warning to every verdict when the SCTs found are missing,
+// applyCT adds a warning to every verdict when the SCTs found are missing,
 // too few or invalid. It never fails a Verdict.
-func ApplyCT(verdicts []Verdict, res ct.Result) {
+func applyCT(verdicts []Verdict, res ct.Result) {
 	var msgs []string
 	for _, s := range res.SCTs {
 		if !s.Valid {
@@ -201,8 +204,8 @@ func ApplyCT(verdicts []Verdict, res ct.Result) {
 	}
 }
 
-// ApplyWarning adds a warning Finding to every available Verdict.
-func ApplyWarning(verdicts []Verdict, msg string) {
+// applyWarning adds a warning Finding to every available Verdict.
+func applyWarning(verdicts []Verdict, msg string) {
 	for i := range verdicts {
 		if !verdicts[i].Unavailable {
 			verdicts[i].Findings = append(verdicts[i].Findings, Finding{Warning, msg})
@@ -210,9 +213,9 @@ func ApplyWarning(verdicts []Verdict, msg string) {
 	}
 }
 
-// ApplyRevocation folds Revocation status results into verdicts: a revoked
+// applyRevocation folds Revocation status results into verdicts: a revoked
 // certificate fails the Verdict, an unknown status only adds a warning.
-func ApplyRevocation(verdicts []Verdict, results []revocation.Result) {
+func applyRevocation(verdicts []Verdict, results []revocation.Result) {
 	for i := range verdicts {
 		v := &verdicts[i]
 		if v.Unavailable {
@@ -231,4 +234,89 @@ func ApplyRevocation(verdicts []Verdict, results []revocation.Result) {
 		}
 		v.Pass = len(v.Reasons) == 0
 	}
+}
+
+// Evidence is what one handshake showed: the Presented chain, any stapled OCSP
+// response, SCTs, TLS version and cipher suite, plus the Scan time.
+type Evidence struct {
+	// Chain is the Presented chain, leaf first, in the order received.
+	Chain []*x509.Certificate
+	// Name is the hostname checked: SNI name or Target host.
+	Name string
+	// OCSPResponse is the stapled response, if any.
+	OCSPResponse []byte
+	SCTs         [][]byte
+	// CipherSuite is the negotiated cipher suite ID.
+	CipherSuite uint16
+	// At is the single clock reading every stage of the Scan judges as of.
+	At time.Time
+}
+
+// JudgeOptions control how Evidence is judged.
+type JudgeOptions struct {
+	// Stores are the Trust stores the Presented chain is verified against.
+	Stores []truststore.Store
+	// CTLogs, when set, is the log list SCTs are verified against.
+	CTLogs *ct.LogList
+	// Revocation enables live OCSP/CRL lookups; the stapled response is always checked.
+	Revocation bool
+	// AllowPrivateRevocation lets live lookups reach loopback, link-local and metadata addresses.
+	AllowPrivateRevocation bool
+}
+
+// Judgement is everything judged from one Scan's Evidence.
+type Judgement struct {
+	// Verdicts holds one Verdict per Trust store, with all Findings applied.
+	Verdicts []Verdict
+	// Revocation holds the Revocation status results.
+	Revocation []revocation.Result
+	// CT holds the SCT verification; nil when no log list was given.
+	CT *ct.Result
+	// WeakCipher is set when the negotiated suite is insecure or lacks forward secrecy.
+	WeakCipher bool
+}
+
+// Judge turns ev into Verdicts, Revocation status results and the CT result.
+// ctx bounds live revocation lookups.
+func Judge(ctx context.Context, ev Evidence, opts JudgeOptions) Judgement {
+	var roots []*x509.CertPool
+	for _, s := range opts.Stores {
+		if !s.Unavailable {
+			roots = append(roots, s.Roots)
+		}
+	}
+	j := Judgement{WeakCipher: weakCipher(ev.CipherSuite)}
+	j.Revocation = revocation.Check(ctx, ev.Chain, ev.OCSPResponse, opts.Revocation,
+		revocation.Policy{AllowPrivate: opts.AllowPrivateRevocation, FallbackRoots: embeddedRoots}, roots, ev.At)
+	if opts.CTLogs != nil {
+		r := ct.Verify(*opts.CTLogs, ev.Chain, roots, ev.SCTs, ev.OCSPResponse, ev.At)
+		j.CT = &r
+	}
+	j.Verdicts = Verify(ev.Chain, ev.Name, opts.Stores, ev.At)
+	if j.WeakCipher {
+		applyWarning(j.Verdicts, "weak cipher suite "+tls.CipherSuiteName(ev.CipherSuite)+" negotiated")
+	}
+	applyRevocation(j.Verdicts, j.Revocation)
+	if j.CT != nil {
+		applyCT(j.Verdicts, *j.CT)
+	}
+	return j
+}
+
+// weakCipher reports suites Go lists as insecure, plus RSA key exchange, which has no forward secrecy.
+func weakCipher(id uint16) bool {
+	for _, s := range tls.InsecureCipherSuites() {
+		if s.ID == id {
+			return true
+		}
+	}
+	return strings.HasPrefix(tls.CipherSuiteName(id), "TLS_RSA_")
+}
+
+func embeddedRoots() *x509.CertPool {
+	s, err := truststore.Embedded()
+	if err != nil {
+		return nil
+	}
+	return s.Roots
 }

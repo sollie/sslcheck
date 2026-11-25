@@ -12,6 +12,10 @@ _Avoid_: Server, endpoint, site
 The certificates a Target sends during the handshake, in the order received.
 _Avoid_: Certificate chain (ambiguous with a verified path)
 
+**Evidence**:
+Everything one Scan observed on a Target's handshake that a Verdict is judged from: the Presented chain, any stapled OCSP response, SCTs, the TLS version and the negotiated cipher suite.
+_Avoid_: Handshake result, capture
+
 **Trust store**:
 A set of root certificates a Presented chain is verified against. Either the embedded Mozilla bundle or the system store.
 _Avoid_: CA bundle, root store
