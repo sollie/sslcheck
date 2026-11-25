@@ -6,11 +6,13 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mattn/go-isatty"
 	"github.com/sollie/sslcheck/internal/render"
 	"github.com/sollie/sslcheck/internal/scan"
+	"github.com/sollie/sslcheck/internal/starttls"
 	"github.com/spf13/pflag"
 )
 
@@ -37,12 +39,14 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		fs.PrintDefaults()
 	}
 	var (
-		sni     = fs.String("sni", "", "server name to send, overriding the Target host")
-		timeout = fs.Duration("timeout", 5*time.Second, "timeout for connect and handshake")
-		ipv4    = fs.BoolP("ipv4", "4", false, "connect over IPv4 only")
-		ipv6    = fs.BoolP("ipv6", "6", false, "connect over IPv6 only")
-		noColor = fs.Bool("no-color", false, "disable colour output")
-		showVer = fs.Bool("version", false, "print version and exit")
+		sni      = fs.String("sni", "", "server name to send, overriding the Target host")
+		timeout  = fs.Duration("timeout", 5*time.Second, "timeout for connect and handshake")
+		ipv4     = fs.BoolP("ipv4", "4", false, "connect over IPv4 only")
+		ipv6     = fs.BoolP("ipv6", "6", false, "connect over IPv6 only")
+		startTLS = fs.String("starttls", "", "upgrade with STARTTLS before the handshake: smtp, imap, pop3 or none (default: inferred from port)")
+		conc     = fs.Int("concurrency", 8, "maximum number of Targets scanned in parallel")
+		noColor  = fs.Bool("no-color", false, "disable colour output")
+		showVer  = fs.Bool("version", false, "print version and exit")
 	)
 	if err := fs.Parse(args); err != nil {
 		if err == pflag.ErrHelp {
@@ -64,7 +68,15 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		_, _ = fmt.Fprintln(stderr, "sslcheck: --ipv4 and --ipv6 are mutually exclusive")
 		return 1
 	}
-	opts := scan.Options{Timeout: *timeout, SNI: *sni, Network: "tcp"}
+	if *conc < 1 {
+		_, _ = fmt.Fprintln(stderr, "sslcheck: --concurrency must be at least 1")
+		return 1
+	}
+	if !starttls.Valid(*startTLS) {
+		_, _ = fmt.Fprintf(stderr, "sslcheck: unsupported --starttls protocol %q (want smtp, imap, pop3 or none)\n", *startTLS)
+		return 1
+	}
+	opts := scan.Options{Timeout: *timeout, SNI: *sni, Network: "tcp", StartTLS: *startTLS}
 	if *ipv4 {
 		opts.Network = "tcp4"
 	}
@@ -82,17 +94,32 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		targets = append(targets, t)
 	}
 
-	results := make([]scan.Result, 0, len(targets))
+	results := scanAll(context.Background(), targets, opts, *conc)
 	code := 0
-	for _, t := range targets {
-		r := scan.Scan(context.Background(), t, opts)
+	for _, r := range results {
 		if r.Err != nil {
 			code = 1
 		}
-		results = append(results, r)
 	}
 	render.Pretty(stdout, results, useColor(stdout, env, *noColor))
 	return code
+}
+
+// scanAll scans targets with at most limit in flight; results keep input order.
+func scanAll(ctx context.Context, targets []scan.Target, opts scan.Options, limit int) []scan.Result {
+	results := make([]scan.Result, len(targets))
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			results[i] = scan.Scan(ctx, t, opts)
+		}()
+	}
+	wg.Wait()
+	return results
 }
 
 func useColor(w io.Writer, env map[string]string, noColor bool) bool {
