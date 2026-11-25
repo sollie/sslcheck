@@ -23,7 +23,6 @@ import (
 
 	"github.com/sollie/sslcheck/internal/ct"
 	"github.com/sollie/sslcheck/internal/revocation"
-	"github.com/sollie/sslcheck/internal/starttls"
 	"github.com/sollie/sslcheck/internal/truststore"
 	"github.com/sollie/sslcheck/internal/verify"
 )
@@ -235,70 +234,21 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 
-	cfg := &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // scanner inspects untrusted chains by design, see ADR-0002
-		MinVersion:         tls.VersionTLS10,
-		CipherSuites:       scanCipherSuites(),
+	ev, err := connect(ctx, t, connectOptions{network: network, sni: sni, startTLS: opts.StartTLS}, at)
+	if err != nil {
+		res.Err = err
+		return res
 	}
-	if net.ParseIP(sni) == nil {
-		cfg.ServerName = sni
-	}
-	proto := opts.StartTLS
-	if proto == "" {
-		proto = starttls.Infer(t.Port)
-	}
-	var tlsConn *tls.Conn
-	if proto == "" || proto == starttls.None {
-		dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
-		conn, err := dialer.DialContext(ctx, network, t.Address())
-		if err != nil {
-			res.Err = err
-			return res
-		}
-		tlsConn = conn.(*tls.Conn)
-	} else {
-		conn, err := (&net.Dialer{}).DialContext(ctx, network, t.Address())
-		if err != nil {
-			res.Err = fmt.Errorf("STARTTLS %s: %w", proto, err)
-			return res
-		}
-		if dl, ok := ctx.Deadline(); ok {
-			_ = conn.SetDeadline(dl)
-		}
-		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-		defer stop()
-		if err := starttls.Upgrade(conn, proto); err != nil {
-			_ = conn.Close()
-			res.Err = err
-			return res
-		}
-		tlsConn = tls.Client(conn, cfg)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			_ = conn.Close()
-			res.Err = err
-			return res
-		}
-	}
-	defer func() { _ = tlsConn.Close() }()
-
-	state := tlsConn.ConnectionState()
-	res.TLSVersion = tls.VersionName(state.Version)
-	res.CipherSuite = tls.CipherSuiteName(state.CipherSuite)
-	for _, c := range state.PeerCertificates {
+	res.TLSVersion = ev.TLSVersion
+	res.CipherSuite = tls.CipherSuiteName(ev.CipherSuite)
+	for _, c := range ev.Chain {
 		res.Certs = append(res.Certs, c)
 		res.Chain = append(res.Chain, describe(c, at))
 	}
 	// Live lookups get their own --timeout budget; the staple needs no network.
 	rctx, rcancel := context.WithTimeout(parent, opts.Timeout)
 	defer rcancel()
-	j := verify.Judge(rctx, verify.Evidence{
-		Chain:        res.Certs,
-		Name:         t.SNI,
-		OCSPResponse: state.OCSPResponse,
-		SCTs:         state.SignedCertificateTimestamps,
-		CipherSuite:  state.CipherSuite,
-		At:           at,
-	}, verify.JudgeOptions{
+	j := verify.Judge(rctx, ev.Evidence, verify.JudgeOptions{
 		Stores:                 opts.Stores,
 		CTLogs:                 opts.CTLogs,
 		Revocation:             opts.Revocation,
@@ -311,20 +261,6 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 	res.CT = j.CT
 	res.Verdicts = j.Verdicts
 	return res
-}
-
-// scanCipherSuites lists every suite Go implements, including those it
-// excludes by default, so legacy Targets can still be inspected (ADR-0002).
-// Only the scanning handshake uses it.
-func scanCipherSuites() []uint16 {
-	var ids []uint16
-	for _, s := range tls.CipherSuites() {
-		ids = append(ids, s.ID)
-	}
-	for _, s := range tls.InsecureCipherSuites() {
-		ids = append(ids, s.ID)
-	}
-	return ids
 }
 
 func describe(c *x509.Certificate, now time.Time) Certificate {
