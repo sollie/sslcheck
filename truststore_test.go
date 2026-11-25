@@ -320,3 +320,29 @@ func TestUpdateRefusesHTTPSToHTTPRedirect(t *testing.T) {
 		t.Error("the cleartext server must never be contacted")
 	}
 }
+
+func TestUpdateRefusesUnsupportedRedirectScheme(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "ftp://example.test/cacert.pem", http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	env := map[string]string{"SSLCHECK_BUNDLE_URL": srv.URL, "SSLCHECK_CACHE_DIR": t.TempDir()}
+	code, _, errs := runCLI(t, env, "--update-trust-store")
+	if code != 1 || !strings.Contains(errs, "scheme") {
+		t.Errorf("exit %d, stderr %q; want exit 1 mentioning the refused scheme", code, errs)
+	}
+}
+
+func TestUpdateStopsAfterNineRedirects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/loop", http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	env := map[string]string{"SSLCHECK_BUNDLE_URL": srv.URL + "/loop", "SSLCHECK_CACHE_DIR": t.TempDir()}
+	code, _, errs := runCLI(t, env, "--update-trust-store")
+	if code != 1 || !strings.Contains(errs, "stopped after 9 redirects") {
+		t.Errorf("exit %d, stderr %q; want exit 1 after 9 redirects", code, errs)
+	}
+}

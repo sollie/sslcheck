@@ -248,7 +248,7 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 	// Live lookups get their own --timeout budget; the staple needs no network.
 	rctx, rcancel := context.WithTimeout(parent, opts.Timeout)
 	defer rcancel()
-	j := verify.Judge(rctx, ev.Evidence, verify.JudgeOptions{
+	j := verify.Judge(rctx, ev, verify.JudgeOptions{
 		Stores:                 opts.Stores,
 		CTLogs:                 opts.CTLogs,
 		Revocation:             opts.Revocation,

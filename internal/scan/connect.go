@@ -11,13 +11,6 @@ import (
 	"github.com/sollie/sslcheck/internal/verify"
 )
 
-// Evidence is what one handshake with a Target showed, plus the TLS version.
-// Chain keeps the Presented chain as parsed certificates in the order received.
-type Evidence struct {
-	verify.Evidence
-	TLSVersion string
-}
-
 // connectOptions control how a Target is connected to.
 type connectOptions struct {
 	network  string
@@ -29,7 +22,7 @@ type connectOptions struct {
 // in-band first when a STARTTLS protocol applies, and returns the Evidence.
 // ctx bounds the whole connection; cancelling it closes the plaintext
 // connection. at is the Scan's single clock reading.
-func connect(ctx context.Context, t Target, opts connectOptions, at time.Time) (Evidence, error) {
+func connect(ctx context.Context, t Target, opts connectOptions, at time.Time) (verify.Evidence, error) {
 	cfg := &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // scanner inspects untrusted chains by design, see ADR-0002
 		MinVersion:         tls.VersionTLS10,
@@ -47,13 +40,13 @@ func connect(ctx context.Context, t Target, opts connectOptions, at time.Time) (
 		dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
 		conn, err := dialer.DialContext(ctx, opts.network, t.Address())
 		if err != nil {
-			return Evidence{}, err
+			return verify.Evidence{}, err
 		}
 		tlsConn = conn.(*tls.Conn)
 	} else {
 		conn, err := (&net.Dialer{}).DialContext(ctx, opts.network, t.Address())
 		if err != nil {
-			return Evidence{}, fmt.Errorf("STARTTLS %s: %w", proto, err)
+			return verify.Evidence{}, fmt.Errorf("STARTTLS %s: %w", proto, err)
 		}
 		if dl, ok := ctx.Deadline(); ok {
 			_ = conn.SetDeadline(dl)
@@ -62,27 +55,25 @@ func connect(ctx context.Context, t Target, opts connectOptions, at time.Time) (
 		defer stop()
 		if err := starttls.Upgrade(conn, proto); err != nil {
 			_ = conn.Close()
-			return Evidence{}, err
+			return verify.Evidence{}, err
 		}
 		tlsConn = tls.Client(conn, cfg)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			_ = conn.Close()
-			return Evidence{}, err
+			return verify.Evidence{}, err
 		}
 	}
 	defer func() { _ = tlsConn.Close() }()
 
 	state := tlsConn.ConnectionState()
-	return Evidence{
-		Evidence: verify.Evidence{
-			Chain:        state.PeerCertificates,
-			Name:         opts.sni,
-			OCSPResponse: state.OCSPResponse,
-			SCTs:         state.SignedCertificateTimestamps,
-			CipherSuite:  state.CipherSuite,
-			At:           at,
-		},
-		TLSVersion: tls.VersionName(state.Version),
+	return verify.Evidence{
+		Chain:        state.PeerCertificates,
+		Name:         opts.sni,
+		OCSPResponse: state.OCSPResponse,
+		SCTs:         state.SignedCertificateTimestamps,
+		TLSVersion:   tls.VersionName(state.Version),
+		CipherSuite:  state.CipherSuite,
+		At:           at,
 	}, nil
 }
 
