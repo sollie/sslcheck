@@ -41,8 +41,10 @@ type Result struct {
 
 // Verdict is the outcome of verifying the chain against one Trust store.
 type Verdict struct {
-	Store         string    `json:"store" yaml:"store" toml:"store"`
-	StoreInfo     string    `json:"store_info" yaml:"store_info" toml:"store_info"`
+	Store     string `json:"store" yaml:"store" toml:"store"`
+	StoreInfo string `json:"store_info" yaml:"store_info" toml:"store_info"`
+	// Name is the hostname the chain was matched against: the SNI name or Target host.
+	Name          string    `json:"name,omitempty" yaml:"name,omitempty" toml:"name,omitempty"`
 	Pass          bool      `json:"pass" yaml:"pass" toml:"pass"`
 	Unavailable   bool      `json:"unavailable" yaml:"unavailable" toml:"unavailable"`
 	Reasons       []string  `json:"reasons,omitempty" yaml:"reasons,omitempty" toml:"reasons,omitempty"`
@@ -102,7 +104,7 @@ func NewReport(results []scan.Result, withPEM bool) Report {
 		if r.Err != nil {
 			out.Error = r.Err.Error()
 		}
-		for i, c := range r.Chain {
+		for _, c := range r.Chain {
 			cert := Certificate{
 				Subject:       c.Subject,
 				SANs:          c.SANs,
@@ -119,10 +121,8 @@ func NewReport(results []scan.Result, withPEM bool) Report {
 			if withPEM {
 				cert.PEM = c.PEM
 			}
-			for _, rv := range r.Revocation {
-				if rv.Cert == i {
-					cert.Revocation = append(cert.Revocation, Revocation{Status: string(rv.Status), Source: string(rv.Source), Detail: rv.Detail})
-				}
+			for _, rv := range c.Revocation {
+				cert.Revocation = append(cert.Revocation, Revocation{Status: string(rv.Status), Source: string(rv.Source), Detail: rv.Detail})
 			}
 			out.Chain = append(out.Chain, cert)
 		}
@@ -137,7 +137,7 @@ func NewReport(results []scan.Result, withPEM bool) Report {
 			}
 		}
 		for _, v := range r.Verdicts {
-			vo := Verdict{Store: v.Store, StoreInfo: v.StoreInfo, Pass: v.Pass, Unavailable: v.Unavailable,
+			vo := Verdict{Store: v.Store, StoreInfo: v.StoreInfo, Name: v.Name, Pass: v.Pass, Unavailable: v.Unavailable,
 				Reasons: v.Reasons, Path: v.Path, Anchor: v.Anchor, HostnameMatch: v.HostnameMatch}
 			for _, f := range v.Findings {
 				vo.Findings = append(vo.Findings, Finding{Severity: string(f.Severity), Message: f.Message})

@@ -73,10 +73,8 @@ func PrettyPEM(w io.Writer, results []scan.Result, useColor, withPEM bool) {
 			field("Signature", c.SigAlgorithm)
 			field("Key", fmt.Sprintf("%s %d bits", c.KeyType, c.KeyBits))
 			field("SHA-256", c.SHA256)
-			for _, rv := range r.Revocation {
-				if rv.Cert == n {
-					field("Revocation", revocationText(p, rv))
-				}
+			for _, rv := range c.Revocation {
+				field("Revocation", revocationText(p, rv))
 			}
 			if withPEM {
 				_, _ = fmt.Fprintf(w, "\n%s", c.PEM)
