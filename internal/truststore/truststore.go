@@ -28,6 +28,9 @@ type Store struct {
 	Source string
 	// Date is when the roots were published; zero when unknown.
 	Date time.Time
+	// Unavailable marks a store that holds no roots at all, e.g. the system
+	// store inside a FROM scratch container.
+	Unavailable bool
 }
 
 // Description returns the source and date of the store for reports.
@@ -102,7 +105,7 @@ func System(env map[string]string) (Store, error) {
 	if err != nil {
 		return Store{}, fmt.Errorf("load system trust store: %w", err)
 	}
-	return Store{Name: "System", Roots: pool, Source: "operating system"}, nil
+	return Store{Name: "System", Roots: pool, Source: "operating system", Unavailable: pool.Equal(x509.NewCertPool())}, nil
 }
 
 // Default returns the stores to verify against. A non-empty explicitFile

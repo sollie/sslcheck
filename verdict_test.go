@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -135,5 +136,27 @@ func TestStrictExitsTwoOnlyWhenAVerdictFails(t *testing.T) {
 	// Mozilla never trusts the private root, so --strict fails.
 	if code, _, _ := runCLI(t, env, "--no-color", "--strict", "--sni", "f.test", srv.Addr); code != 2 {
 		t.Errorf("with --strict exit %d, want 2", code)
+	}
+}
+
+func TestEmptySystemStoreReportsUnavailable(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("system store is only emptied via SSL_CERT_FILE/SSL_CERT_DIR on Linux")
+	}
+	empty := t.TempDir()
+	t.Setenv("SSL_CERT_FILE", filepath.Join(empty, "none.pem"))
+	t.Setenv("SSL_CERT_DIR", empty)
+	root := testutil.NewCA(t, "Private Root")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "ok.test", DNSNames: []string{"ok.test"}})
+	srv := testutil.StartTLS(t, leaf)
+
+	code, out, errs := runCLI(t, map[string]string{}, "--no-color", "--strict", "--sni", "ok.test", srv.Addr)
+	_, sys := verdictLines(out)
+	if !strings.Contains(sys, "unavailable") {
+		t.Errorf("system verdict should be unavailable:\n%s", out)
+	}
+	// Mozilla fails (private CA), so strict exits 2; unavailable must not matter on its own.
+	if code != 2 {
+		t.Errorf("exit %d, stderr: %s", code, errs)
 	}
 }
