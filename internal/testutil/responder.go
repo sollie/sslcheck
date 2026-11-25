@@ -21,14 +21,16 @@ import (
 type Responder struct {
 	URL string // base URL; OCSP is served at /ocsp and the CRL at /crl
 
-	ca      *CA
-	srv     *httptest.Server
-	hits    atomic.Int64
-	mu      sync.Mutex
-	signer  *Cert
-	age     time.Duration
-	noNext  bool
-	revoked map[string]bool
+	ca       *CA
+	srv      *httptest.Server
+	hits     atomic.Int64
+	mu       sync.Mutex
+	signer   *Cert
+	age      time.Duration
+	noNext   bool
+	redirect string
+	oversize bool
+	revoked  map[string]bool
 }
 
 // StartResponder starts a responder that signs for ca. It is closed when the test ends.
@@ -74,6 +76,37 @@ func (r *Responder) IssuedAgo(d time.Duration, noNextUpdate bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.age, r.noNext = d, noNextUpdate
+}
+
+// RedirectTo makes every response a redirect to target.
+func (r *Responder) RedirectTo(target string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.redirect = target
+}
+
+// Oversize makes every response larger than any accepted limit.
+func (r *Responder) Oversize() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.oversize = true
+}
+
+// intercept answers redirect and oversize requests; it reports whether it did.
+func (r *Responder) intercept(w http.ResponseWriter, req *http.Request) bool {
+	r.hits.Add(1)
+	r.mu.Lock()
+	redirect, oversize := r.redirect, r.oversize
+	r.mu.Unlock()
+	switch {
+	case redirect != "":
+		http.Redirect(w, req, redirect, http.StatusFound)
+	case oversize:
+		_, _ = w.Write(make([]byte, 20<<20))
+	default:
+		return false
+	}
+	return true
 }
 
 // Close stops the responder, making it unreachable.
@@ -132,7 +165,9 @@ func (r *Responder) StapleWithSCTs(t testing.TB, c *Cert, scts ...[]byte) []byte
 }
 
 func (r *Responder) serveOCSP(w http.ResponseWriter, req *http.Request) {
-	r.hits.Add(1)
+	if r.intercept(w, req) {
+		return
+	}
 	body, _ := io.ReadAll(req.Body)
 	parsed, err := ocsp.ParseRequest(body)
 	if err != nil {
@@ -143,8 +178,10 @@ func (r *Responder) serveOCSP(w http.ResponseWriter, req *http.Request) {
 	_, _ = w.Write(r.ocspResponse(parsed.SerialNumber))
 }
 
-func (r *Responder) serveCRL(w http.ResponseWriter, _ *http.Request) {
-	r.hits.Add(1)
+func (r *Responder) serveCRL(w http.ResponseWriter, req *http.Request) {
+	if r.intercept(w, req) {
+		return
+	}
 	r.mu.Lock()
 	var entries []x509.RevocationListEntry
 	for s := range r.revoked {

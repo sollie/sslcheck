@@ -86,6 +86,9 @@ type Options struct {
 	// Revocation enables live OCSP/CRL lookups; the stapled response is
 	// always checked.
 	Revocation bool
+	// AllowPrivateRevocation lets live lookups reach loopback, link-local and
+	// metadata addresses, for internal PKI.
+	AllowPrivateRevocation bool
 	// CTLogs, when set, is the log list SCTs are verified against.
 	CTLogs *ct.LogList
 	// Stores are the Trust stores each Presented chain is verified against.
@@ -240,7 +243,7 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 	// Live lookups get their own --timeout budget; the staple needs no network.
 	rctx, rcancel := context.WithTimeout(parent, opts.Timeout)
 	defer rcancel()
-	revs := revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, roots, now())
+	revs := revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, revocation.Policy{AllowPrivate: opts.AllowPrivateRevocation, FallbackRoots: embeddedRoots}, roots, now())
 	for _, rv := range revs {
 		res.Chain[rv.Cert].Revocation = append(res.Chain[rv.Cert].Revocation, rv)
 	}
@@ -293,4 +296,12 @@ func keyInfo(c *x509.Certificate) (string, int) {
 		return "Ed25519", 256
 	}
 	return c.PublicKeyAlgorithm.String(), 0
+}
+
+func embeddedRoots() *x509.CertPool {
+	s, err := truststore.Embedded()
+	if err != nil {
+		return nil
+	}
+	return s.Roots
 }

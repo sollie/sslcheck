@@ -5,13 +5,18 @@ package revocation
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"runtime"
 	"slices"
+	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ocsp"
@@ -60,13 +65,24 @@ type Result struct {
 	Detail string
 }
 
+// Policy controls live lookups.
+type Policy struct {
+	// AllowPrivate permits loopback, link-local, metadata and other private
+	// destinations; by default loopback, link-local and metadata addresses are
+	// refused at connection time.
+	AllowPrivate bool
+	// FallbackRoots returns the roots HTTPS responders are verified against
+	// when the system pool is empty, as in a scratch container image.
+	FallbackRoots func() *x509.CertPool
+}
+
 // Check returns the stapled result for the leaf, if a staple was presented,
 // and, when live is set, live OCSP (or CRL when there is no OCSP URL) results
 // for every certificate except the root. Issuers are resolved with
 // issuer.Find, using roots for the last presented certificate. Responses count
 // only when authenticated by the issuer or a valid delegated responder.
-// Live lookups honour ctx.
-func Check(ctx context.Context, chain []*x509.Certificate, staple []byte, live bool, roots []*x509.CertPool, now time.Time) []Result {
+// Live lookups honour ctx and policy.
+func Check(ctx context.Context, chain []*x509.Certificate, staple []byte, live bool, policy Policy, roots []*x509.CertPool, now time.Time) []Result {
 	var out []Result
 	if len(chain) == 0 {
 		return out
@@ -77,7 +93,7 @@ func Check(ctx context.Context, chain []*x509.Certificate, staple []byte, live b
 	if !live {
 		return out
 	}
-	client := &http.Client{}
+	client := newClient(policy)
 	for i, c := range chain {
 		if isRoot(c) {
 			continue
@@ -85,6 +101,69 @@ func Check(ctx context.Context, chain []*x509.Certificate, staple []byte, live b
 		out = append(out, checkLive(ctx, client, i, c, issuer.Find(chain, i, roots, now), now))
 	}
 	return out
+}
+
+const maxRedirects = 3
+
+func newClient(policy Policy) *http.Client {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	if !policy.AllowPrivate {
+		dialer.Control = refuseInternal
+	}
+	tr := &http.Transport{
+		DialContext:         dialer.DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		DisableKeepAlives:   true,
+	}
+	if policy.FallbackRoots != nil && systemPoolEmpty() {
+		tr.TLSClientConfig = &tls.Config{RootCAs: policy.FallbackRoots(), MinVersion: tls.VersionTLS12}
+	}
+	return &http.Client{
+		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("redirect refused: unsupported scheme %q", req.URL.Scheme)
+			}
+			return nil
+		},
+	}
+}
+
+// systemPoolEmpty reports whether Go has no system roots to verify with.
+// macOS and Windows verify through the platform, not a pool.
+func systemPoolEmpty() bool {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return false
+	}
+	pool, err := x509.SystemCertPool()
+	return err != nil || pool == nil || len(pool.Subjects()) == 0 //nolint:staticcheck // only the count is needed
+}
+
+var metadataAddrs = []netip.Addr{
+	netip.MustParseAddr("169.254.169.254"),
+	netip.MustParseAddr("fd00:ec2::254"),
+	netip.MustParseAddr("100.100.100.200"),
+}
+
+// refuseInternal runs at connection time, on the address actually dialled, so
+// DNS answers and redirects cannot bypass it.
+func refuseInternal(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return fmt.Errorf("refused: %q is not an IP address", host)
+	}
+	addr = addr.Unmap()
+	if addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsUnspecified() || slices.Contains(metadataAddrs, addr) {
+		return fmt.Errorf("refused: %s is a loopback, link-local or metadata address (see --allow-private-revocation)", addr)
+	}
+	return nil
 }
 
 func isRoot(c *x509.Certificate) bool {
@@ -219,9 +298,12 @@ func fetch(ctx context.Context, client *http.Client, method, rawURL string, body
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: HTTP %d", rawURL, resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", rawURL, err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s: response exceeds the %d byte limit", rawURL, limit)
 	}
 	return data, nil
 }

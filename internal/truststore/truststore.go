@@ -45,7 +45,7 @@ func (s Store) Description() string {
 // Mozilla returns the Mozilla bundle: a cached copy in the cache directory
 // when it is newer than the embedded one, otherwise the embedded bundle.
 func Mozilla(env map[string]string) (Store, error) {
-	emb, err := embedded()
+	emb, err := Embedded()
 	if err != nil {
 		return Store{}, err
 	}
@@ -59,7 +59,8 @@ func Mozilla(env map[string]string) (Store, error) {
 	return emb, nil
 }
 
-func embedded() (Store, error) {
+// Embedded returns the Mozilla bundle compiled into the binary.
+func Embedded() (Store, error) {
 	b, err := parseBundle(mozillaPEM)
 	if err != nil {
 		return Store{}, fmt.Errorf("embedded Mozilla bundle: %w", err)

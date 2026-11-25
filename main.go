@@ -54,6 +54,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		format    = fs.StringP("format", "f", "pretty", "output format: pretty, json, yaml or toml")
 		withPEM   = fs.Bool("pem", false, "include each certificate as PEM")
 		revoc     = fs.Bool("revocation", false, "also query live OCSP (CRL when no OCSP URL) for every certificate except the root")
+		privRev   = fs.Bool("allow-private-revocation", false, "let --revocation reach loopback, link-local and cloud-metadata addresses (for internal PKI)")
 		strict    = fs.Bool("strict", false, "exit 2 when any Trust store Verdict fails")
 		trustFile = fs.String("trust-store", "", "PEM file of root certificates to verify against, overriding the Mozilla and system stores")
 		update    = fs.Bool("update-trust-store", false, "download the latest Mozilla bundle and CT log list into the cache directory and exit")
@@ -95,7 +96,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
 		return 1
 	}
-	opts := scan.Options{CTLogs: &logList, Timeout: *timeout, SNI: *sni, Network: "tcp", StartTLS: *startTLS, Revocation: *revoc}
+	opts := scan.Options{CTLogs: &logList, Timeout: *timeout, SNI: *sni, Network: "tcp", StartTLS: *startTLS, Revocation: *revoc, AllowPrivateRevocation: *privRev}
 	if !slices.Contains(render.Formats, *format) {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: unknown format %q (want %s)\n", *format, strings.Join(render.Formats, ", "))
 		return 1
