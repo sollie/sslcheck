@@ -86,7 +86,7 @@ func parseBundle(data []byte) (bundle, error) {
 func HTTPClient() *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	if pool, err := x509.SystemCertPool(); err != nil || pool.Equal(x509.NewCertPool()) {
-		if emb, err := embedded(); err == nil {
+		if emb, err := Embedded(); err == nil {
 			tr.TLSClientConfig = &tls.Config{RootCAs: emb.Roots, MinVersion: tls.VersionTLS12}
 		}
 	}
@@ -101,7 +101,7 @@ func Update(ctx context.Context, env map[string]string, client *http.Client) (re
 	if client == nil {
 		client = HTTPClient()
 	}
-	emb, err := embedded()
+	emb, err := Embedded()
 	if err != nil {
 		return refresh.Result{}, err
 	}

@@ -50,7 +50,8 @@ sslcheck --sni www.example.com 192.0.2.10
 | `--concurrency` | Maximum targets scanned in parallel (default `8`, minimum `1`). |
 | `--starttls` | `smtp`, `imap`, `pop3` or `none`. Default: inferred from the port. |
 | `--trust-store` | PEM file of roots to verify against, replacing the Mozilla and system stores. |
-| `--revocation` | Also query live OCSP (CRL when no OCSP URL) for every certificate except the root. |
+| `--revocation` | Also query live OCSP (CRL when no OCSP URL) for every certificate except the root. This contacts URLs supplied by the certificates; see [Revocation](#revocation). |
+| `--allow-private-revocation` | Let `--revocation` reach loopback, link-local and cloud-metadata addresses, for internal PKI. |
 | `--strict` | Exit 2 when any trust store verdict fails. |
 | `--update-trust-store` | Download the latest Mozilla bundle and CT log list into the cache directory and exit. |
 | `--version` | Print version and exit. |
@@ -110,6 +111,17 @@ Stapled OCSP responses are always read. With `--revocation`, sslcheck also
 queries OCSP (or the CRL when there is no OCSP URL) for every certificate
 except the root. Each certificate is `good`, `revoked` or `unknown`; `revoked`
 fails the verdict, `unknown` only warns.
+
+`--revocation` contacts the OCSP and CRL URLs written in the certificates the
+target presents, so the target chooses where sslcheck connects. Lookups follow
+a fetch policy: only HTTP(S) URLs, at most 3 redirects (each to HTTP(S) only),
+and responses over 1 MiB (OCSP) or 16 MiB (CRL) are rejected with a size error
+rather than truncated. By default, connections to loopback, link-local and
+cloud-metadata addresses are refused at connection time, so DNS names and
+redirects cannot get around it. Pass `--allow-private-revocation` to lift this
+for internal PKI. HTTPS responders are verified against the embedded Mozilla
+roots when the system has no root certificates (for example in the container
+image).
 
 ### Certificate Transparency
 

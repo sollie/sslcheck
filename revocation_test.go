@@ -89,7 +89,7 @@ func TestLiveLookupsOnlyWithRevocationFlag(t *testing.T) {
 		t.Errorf("revocation unchecked, verdict should pass:\n%s", out)
 	}
 
-	_, out, _ = runCLI(t, f.env, "--no-color", "--revocation", "--sni", "ok.test", srv.Addr)
+	_, out, _ = runCLI(t, f.env, "--no-color", "--revocation", "--allow-private-revocation", "--sni", "ok.test", srv.Addr)
 	if sys := f.systemVerdict(t, out); !strings.Contains(sys, "revoked") {
 		t.Errorf("live lookup should fail the verdict as revoked:\n%s", out)
 	}
@@ -104,7 +104,7 @@ func TestUnreachableResponderIsUnknownAndOnlyWarns(t *testing.T) {
 	f.interResp.Close()
 	srv := testutil.StartTLS(t, f.leaf, &f.inter.Cert)
 
-	code, out, errs := runCLI(t, f.env, "--no-color", "--strict", "--revocation", "--timeout", "2s", "--sni", "ok.test", srv.Addr)
+	code, out, errs := runCLI(t, f.env, "--no-color", "--strict", "--revocation", "--allow-private-revocation", "--timeout", "2s", "--sni", "ok.test", srv.Addr)
 	if code == 1 {
 		t.Fatalf("exit 1: %s", errs)
 	}
@@ -124,7 +124,7 @@ func TestCRLFallbackWhenNoOCSPURL(t *testing.T) {
 	f.interResp.Revoke(f.leaf)
 	srv := testutil.StartTLS(t, f.leaf, &f.inter.Cert)
 
-	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--sni", "ok.test", srv.Addr)
+	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--allow-private-revocation", "--sni", "ok.test", srv.Addr)
 	if sys := f.systemVerdict(t, out); !strings.Contains(sys, "revoked") {
 		t.Errorf("CRL should mark the leaf revoked:\n%s", out)
 	}
@@ -223,7 +223,7 @@ func TestLiveRevocationResolvesIssuerFromTrustStoreAndAnyOrder(t *testing.T) {
 			f := newRevFixture(t, testutil.CertOpts{})
 			srv := testutil.StartTLS(t, f.leaf, order(f)...)
 
-			_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--sni", "ok.test", srv.Addr)
+			_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--allow-private-revocation", "--sni", "ok.test", srv.Addr)
 			if strings.Contains(out, "unknown (") {
 				t.Errorf("spurious unknown:\n%s", out)
 			}
@@ -239,8 +239,66 @@ func TestNoRevocationURLIsNotLabelledCRL(t *testing.T) {
 	f.leaf = f.inter.Issue(t, testutil.CertOpts{CommonName: "ok.test", DNSNames: []string{"ok.test"}})
 	srv := testutil.StartTLS(t, f.leaf, &f.inter.Cert)
 
-	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--sni", "ok.test", srv.Addr)
+	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--allow-private-revocation", "--sni", "ok.test", srv.Addr)
 	if strings.Contains(out, "(crl)") {
 		t.Errorf("source mislabelled as CRL:\n%s", out)
+	}
+}
+
+func TestLiveLookupToLoopbackRefusedByDefault(t *testing.T) {
+	f := newRevFixture(t, testutil.CertOpts{})
+	srv := testutil.StartTLS(t, f.leaf, &f.inter.Cert, &f.root.Cert)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--sni", "ok.test", srv.Addr)
+	if n := f.interResp.Requests() + f.rootResp.Requests(); n != 0 {
+		t.Errorf("responders on loopback were contacted %d times without opt-in", n)
+	}
+	if !strings.Contains(out, "unknown (ocsp)") || !strings.Contains(out, "refused") {
+		t.Errorf("expected unknown with a refusal reason:\n%s", out)
+	}
+}
+
+func TestLiveLookupToMetadataAddressRefusedByDefault(t *testing.T) {
+	f := newRevFixture(t, testutil.CertOpts{OCSPServer: []string{"http://169.254.169.254/ocsp"}})
+	srv := testutil.StartTLS(t, f.leaf, &f.inter.Cert, &f.root.Cert)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--timeout", "2s", "--sni", "ok.test", srv.Addr)
+	if !strings.Contains(out, "refused") {
+		t.Errorf("metadata address should be refused:\n%s", out)
+	}
+}
+
+func TestRedirectToDisallowedSchemeRefused(t *testing.T) {
+	f := newRevFixture(t, testutil.CertOpts{})
+	f.interResp.RedirectTo("ftp://example.test/ocsp")
+	srv := testutil.StartTLS(t, f.leaf, &f.inter.Cert, &f.root.Cert)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--allow-private-revocation", "--sni", "ok.test", srv.Addr)
+	if !strings.Contains(out, "unknown (ocsp)") || !strings.Contains(out, "scheme") {
+		t.Errorf("redirect to ftp should be refused:\n%s", out)
+	}
+}
+
+func TestRedirectToMetadataAddressRefusedByDefaultOnly(t *testing.T) {
+	// A public-looking first hop cannot be simulated on loopback, so the
+	// redirect chain is checked with the opt-in off: the first hop is refused.
+	f := newRevFixture(t, testutil.CertOpts{})
+	f.interResp.RedirectTo("http://169.254.169.254/ocsp")
+	srv := testutil.StartTLS(t, f.leaf, &f.inter.Cert, &f.root.Cert)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--sni", "ok.test", srv.Addr)
+	if !strings.Contains(out, "refused") {
+		t.Errorf("expected refusal:\n%s", out)
+	}
+}
+
+func TestOversizedResponseGivesSizeError(t *testing.T) {
+	f := newRevFixture(t, testutil.CertOpts{})
+	f.interResp.Oversize()
+	srv := testutil.StartTLS(t, f.leaf, &f.inter.Cert, &f.root.Cert)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--allow-private-revocation", "--sni", "ok.test", srv.Addr)
+	if !strings.Contains(out, "exceeds") {
+		t.Errorf("expected a size error:\n%s", out)
 	}
 }
