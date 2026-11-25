@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -16,11 +18,16 @@ import (
 // runCLI drives the single test seam and returns exit code, stdout and stderr.
 func runCLI(t *testing.T, env map[string]string, args ...string) (int, string, string) {
 	t.Helper()
+	return runCLICtx(t, context.Background(), env, args...)
+}
+
+func runCLICtx(t *testing.T, ctx context.Context, env map[string]string, args ...string) (int, string, string) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	if env == nil {
 		env = map[string]string{}
 	}
-	code := run(args, &out, &errb, env)
+	code := run(ctx, args, &out, &errb, env)
 	return code, out.String(), errb.String()
 }
 
@@ -365,7 +372,7 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk ful
 func TestPrettyWriteFailureIsReported(t *testing.T) {
 	srv := testutil.StartTLS(t, testutil.SelfSigned(t, testutil.CertOpts{CommonName: "w.test"}))
 	var errb bytes.Buffer
-	code := run([]string{"--no-color", srv.Addr}, failingWriter{}, &errb, map[string]string{})
+	code := run(context.Background(), []string{"--no-color", srv.Addr}, failingWriter{}, &errb, map[string]string{})
 	if code == 0 || !strings.Contains(errb.String(), "disk full") {
 		t.Errorf("exit %d, stderr: %q", code, errb.String())
 	}
@@ -404,5 +411,45 @@ func TestScanModernCipherSuiteIsReportedWithoutWarning(t *testing.T) {
 	_, out, _ := runCLI(t, nil, "--no-color", srv.Addr)
 	if !strings.Contains(out, "Cipher suite: TLS_") || strings.Contains(out, "weak cipher suite") {
 		t.Errorf("unexpected output:\n%s", out)
+	}
+}
+
+func TestCancelledRunReportsAnErrorForEveryUnstartedTarget(t *testing.T) {
+	srv := testutil.StartTLS(t, testutil.SelfSigned(t, testutil.CertOpts{CommonName: "c.test"}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	code, out, _ := runCLICtx(t, ctx, nil, "-f", "json", "--concurrency", "1", srv.Addr, srv.Addr, srv.Addr)
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	var rep struct {
+		Results []struct {
+			Error string `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("output is not complete JSON: %v\n%s", err, out)
+	}
+	if len(rep.Results) != 3 {
+		t.Fatalf("got %d results, want 3:\n%s", len(rep.Results), out)
+	}
+	for i, r := range rep.Results {
+		if !strings.Contains(r.Error, "canceled") {
+			t.Errorf("result %d error = %q, want cancellation", i, r.Error)
+		}
+	}
+}
+
+func TestCancelDuringSTARTTLSDoesNotWaitForTimeout(t *testing.T) {
+	srv := testutil.StartHostileSTARTTLS(t, "smtp", testutil.HostileSilent)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	start := time.Now()
+	code, out, _ := runCLICtx(t, ctx, nil, "-f", "json", "--timeout", "30s", srv.Addr)
+	if el := time.Since(start); el > 5*time.Second {
+		t.Errorf("took %v after cancel", el)
+	}
+	if code != 1 || !json.Valid([]byte(out)) {
+		t.Errorf("exit %d, output %q", code, out)
 	}
 }

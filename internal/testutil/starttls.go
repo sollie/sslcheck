@@ -140,6 +140,7 @@ const (
 	HostileBareCode       = "bare-code"       // multi-line EHLO reply whose continuation is a bare "250"
 	HostileEndlessLine    = "endless-line"    // greeting that never ends its line
 	HostileEndlessReply   = "endless-reply"   // endless run of continuation lines
+	HostileSilent         = "silent"          // accepts the connection and never speaks
 	HostileExtraPlaintext = "extra-plaintext" // plaintext sent right after the go-ahead
 )
 
@@ -185,6 +186,10 @@ func serveHostile(conn net.Conn, proto, behaviour string) {
 	}
 	readLine := func() bool { _, err := br.ReadString('\n'); return err == nil }
 
+	if behaviour == HostileSilent {
+		_, _ = br.ReadByte()
+		return
+	}
 	switch proto {
 	case "smtp":
 		if behaviour == HostileEndlessLine {

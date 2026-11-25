@@ -154,7 +154,15 @@ func ScanAll(ctx context.Context, targets []Target, opts Options) []Result {
 	sem := make(chan struct{}, max(opts.Concurrency, 1))
 	var wg sync.WaitGroup
 	for i, t := range targets {
-		sem <- struct{}{}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			// Admission stops: every unstarted Target gets an error result.
+			results[i] = Result{Target: t, Err: ctx.Err()}
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
@@ -169,10 +177,13 @@ func ScanAll(ctx context.Context, targets []Target, opts Options) []Result {
 // captures the Presented chain in the order received and judges it.
 func scanOne(ctx context.Context, t Target, opts Options) Result {
 	res := Result{Target: t}
-	now := opts.Now
-	if now == nil {
-		now = time.Now
+	clock := opts.Now
+	if clock == nil {
+		clock = time.Now
 	}
+	// One clock reading serves every stage of this Scan.
+	at := clock()
+	now := func() time.Time { return at }
 	if opts.Timeout <= 0 {
 		opts.Timeout = 5 * time.Second
 	}
@@ -221,6 +232,8 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 		if dl, ok := ctx.Deadline(); ok {
 			_ = conn.SetDeadline(dl)
 		}
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		defer stop()
 		if err := starttls.Upgrade(conn, proto); err != nil {
 			_ = conn.Close()
 			res.Err = err
