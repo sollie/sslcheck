@@ -79,30 +79,30 @@ type Options struct {
 
 // Certificate describes one certificate of the Presented chain.
 type Certificate struct {
-	Subject       string
-	SANs          []string
-	Issuer        string
-	Serial        string
-	NotBefore     time.Time
-	NotAfter      time.Time
-	DaysRemaining int
-	SigAlgorithm  string
-	KeyType       string
-	KeyBits       int
-	SHA256        string
-	PEM           string
+	Subject       string    `json:"subject"`
+	SANs          []string  `json:"sans"`
+	Issuer        string    `json:"issuer"`
+	Serial        string    `json:"serial"`
+	NotBefore     time.Time `json:"not_before"`
+	NotAfter      time.Time `json:"not_after"`
+	DaysRemaining int       `json:"days_remaining"`
+	SigAlgorithm  string    `json:"signature_algorithm"`
+	KeyType       string    `json:"key_type"`
+	KeyBits       int       `json:"key_bits"`
+	SHA256        string    `json:"sha256_fingerprint"`
+	PEM           string    `json:"pem"`
 }
 
 // Result is the outcome of scanning one Target.
 type Result struct {
-	Target     Target
-	TLSVersion string
-	Chain      []Certificate
+	Target     Target        `json:"target"`
+	TLSVersion string        `json:"tls_version"`
+	Chain      []Certificate `json:"chain"`
 	// Certs is the Presented chain as parsed certificates, in the order received.
-	Certs []*x509.Certificate
+	Certs []*x509.Certificate `json:"-"`
 	// Verdicts holds one Verdict per Trust store; filled by the caller via verify.
-	Verdicts []verify.Verdict
-	Err      error
+	Verdicts []verify.Verdict `json:"verdicts,omitempty"`
+	Err      error            `json:"-"`
 }
 
 // Scan connects to t, completes the handshake without verifying it and
