@@ -75,6 +75,7 @@ func PrettyPEM(w io.Writer, results []scan.Result, useColor, withPEM bool) {
 				_, _ = fmt.Fprintf(w, "\n%s", c.PEM)
 			}
 		}
+		writeVerdicts(w, p, r.Verdicts)
 	}
 }
 
