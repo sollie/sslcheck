@@ -96,10 +96,10 @@ func System(env map[string]string) (Store, error) {
 			return Store{}, fmt.Errorf("read %s: %w", EnvSystemOverride, err)
 		}
 		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(data) {
-			return Store{}, fmt.Errorf("%s: no certificates in %s", EnvSystemOverride, path)
-		}
-		return Store{Name: "System", Roots: pool, Source: "file " + path}, nil
+		// A file without certificates models an empty system store, as in a
+		// FROM scratch container.
+		ok := pool.AppendCertsFromPEM(data)
+		return Store{Name: "System", Roots: pool, Source: "file " + path, Unavailable: !ok}, nil
 	}
 	pool, err := x509.SystemCertPool()
 	if err != nil {
