@@ -217,7 +217,6 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 	}
 	// One clock reading serves every stage of this Scan.
 	at := clock()
-	now := func() time.Time { return at }
 	if opts.Timeout <= 0 {
 		opts.Timeout = 5 * time.Second
 	}
@@ -285,36 +284,32 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 	state := tlsConn.ConnectionState()
 	res.TLSVersion = tls.VersionName(state.Version)
 	res.CipherSuite = tls.CipherSuiteName(state.CipherSuite)
-	res.WeakCipher = weakCipher(state.CipherSuite)
 	for _, c := range state.PeerCertificates {
 		res.Certs = append(res.Certs, c)
-		res.Chain = append(res.Chain, describe(c, now()))
-	}
-	var roots []*x509.CertPool
-	for _, s := range opts.Stores {
-		if !s.Unavailable {
-			roots = append(roots, s.Roots)
-		}
+		res.Chain = append(res.Chain, describe(c, at))
 	}
 	// Live lookups get their own --timeout budget; the staple needs no network.
 	rctx, rcancel := context.WithTimeout(parent, opts.Timeout)
 	defer rcancel()
-	revs := revocation.Check(rctx, res.Certs, state.OCSPResponse, opts.Revocation, revocation.Policy{AllowPrivate: opts.AllowPrivateRevocation, FallbackRoots: embeddedRoots}, roots, now())
-	for _, rv := range revs {
+	j := verify.Judge(rctx, verify.Evidence{
+		Chain:        res.Certs,
+		Name:         t.SNI,
+		OCSPResponse: state.OCSPResponse,
+		SCTs:         state.SignedCertificateTimestamps,
+		CipherSuite:  state.CipherSuite,
+		At:           at,
+	}, verify.JudgeOptions{
+		Stores:                 opts.Stores,
+		CTLogs:                 opts.CTLogs,
+		Revocation:             opts.Revocation,
+		AllowPrivateRevocation: opts.AllowPrivateRevocation,
+	})
+	for _, rv := range j.Revocation {
 		res.Chain[rv.Cert].Revocation = append(res.Chain[rv.Cert].Revocation, rv)
 	}
-	if opts.CTLogs != nil {
-		r := ct.Verify(*opts.CTLogs, res.Certs, roots, state.SignedCertificateTimestamps, state.OCSPResponse, now())
-		res.CT = &r
-	}
-	res.Verdicts = verify.Verify(res.Certs, t.SNI, opts.Stores, now())
-	if res.WeakCipher {
-		verify.ApplyWarning(res.Verdicts, "weak cipher suite "+res.CipherSuite+" negotiated")
-	}
-	verify.ApplyRevocation(res.Verdicts, revs)
-	if res.CT != nil {
-		verify.ApplyCT(res.Verdicts, *res.CT)
-	}
+	res.WeakCipher = j.WeakCipher
+	res.CT = j.CT
+	res.Verdicts = j.Verdicts
 	return res
 }
 
@@ -330,16 +325,6 @@ func scanCipherSuites() []uint16 {
 		ids = append(ids, s.ID)
 	}
 	return ids
-}
-
-// weakCipher reports suites Go lists as insecure, plus RSA key exchange, which has no forward secrecy.
-func weakCipher(id uint16) bool {
-	for _, s := range tls.InsecureCipherSuites() {
-		if s.ID == id {
-			return true
-		}
-	}
-	return strings.HasPrefix(tls.CipherSuiteName(id), "TLS_RSA_")
 }
 
 func describe(c *x509.Certificate, now time.Time) Certificate {
@@ -381,12 +366,4 @@ func keyInfo(c *x509.Certificate) (string, int) {
 		return "Ed25519", 256
 	}
 	return c.PublicKeyAlgorithm.String(), 0
-}
-
-func embeddedRoots() *x509.CertPool {
-	s, err := truststore.Embedded()
-	if err != nil {
-		return nil
-	}
-	return s.Roots
 }
