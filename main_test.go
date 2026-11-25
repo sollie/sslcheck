@@ -289,3 +289,14 @@ func TestExpiryWarningUnderThirtyDays(t *testing.T) {
 		})
 	}
 }
+
+func TestVersionFlagPrintsVersion(t *testing.T) {
+	old := version
+	version = "1.2.3"
+	t.Cleanup(func() { version = old })
+
+	code, out, _ := runCLI(t, nil, "--version")
+	if code != 0 || strings.TrimSpace(out) != "sslcheck 1.2.3" {
+		t.Fatalf("exit %d, stdout %q", code, out)
+	}
+}
