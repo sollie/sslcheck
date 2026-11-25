@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sollie/sslcheck/internal/testutil"
 )
@@ -116,6 +119,56 @@ func TestUsageErrorsExitOne(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if code, _, errs := runCLI(t, nil, args...); code != 1 || errs == "" {
 				t.Errorf("exit %d, stderr %q; want 1 with message", code, errs)
+			}
+		})
+	}
+}
+
+func TestScanReportsCertificateDetailsAndTLSVersion(t *testing.T) {
+	root := testutil.NewCA(t, "Detail Root")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "detail.test", DNSNames: []string{"detail.test"}, NotAfter: time.Now().Add(90*24*time.Hour + time.Hour)})
+	srv := testutil.StartTLS(t, leaf)
+
+	code, out, errs := runCLI(t, nil, "--no-color", srv.Addr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errs)
+	}
+	sum := sha256.Sum256(leaf.DER)
+	for _, want := range []string{
+		"TLS version: TLS 1.3",
+		"Issuer:        CN=Detail Root",
+		"Serial:        " + leaf.Leaf.SerialNumber.Text(16),
+		"Signature:     ECDSA-SHA256",
+		"Key:           ECDSA 256 bits",
+		"SHA-256:       " + hex.EncodeToString(sum[:]),
+		"90 days remaining",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "warning") {
+		t.Errorf("unexpected warning for certificate with 90 days left, got:\n%s", out)
+	}
+}
+
+func TestExpiryWarningUnderThirtyDays(t *testing.T) {
+	for name, tc := range map[string]struct {
+		hours int
+		warn  bool
+	}{
+		"29 days": {29*24 + 1, true},
+		"31 days": {31*24 + 1, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			leaf := testutil.SelfSigned(t, testutil.CertOpts{
+				CommonName: "soon.test",
+				NotAfter:   time.Now().Add(time.Duration(tc.hours) * time.Hour),
+			})
+			srv := testutil.StartTLS(t, leaf)
+			_, out, _ := runCLI(t, nil, "--no-color", srv.Addr)
+			if got := strings.Contains(out, "(warning)"); got != tc.warn {
+				t.Errorf("warning=%v, want %v:\n%s", got, tc.warn, out)
 			}
 		})
 	}

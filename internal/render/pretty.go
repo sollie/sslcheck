@@ -10,6 +10,7 @@ import (
 	"github.com/sollie/sslcheck/internal/scan"
 )
 
+// expiryWarnDays is the threshold below which a certificate gets a warning.
 const expiryWarnDays = 30
 
 type palette struct {
@@ -73,8 +74,8 @@ func expiry(p palette, days int) string {
 	switch {
 	case days < 0:
 		return p.bad.Sprintf("expired %d days ago", -days)
-	case days <= expiryWarnDays:
-		return p.warn.Sprintf("%d days remaining", days)
+	case days < expiryWarnDays:
+		return p.warn.Sprintf("%d days remaining (warning)", days)
 	}
 	return p.ok.Sprintf("%d days remaining", days)
 }
