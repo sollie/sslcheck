@@ -30,14 +30,14 @@ func newPalette(useColor bool) palette {
 		return c
 	}
 	return palette{
-		heading: mk(color.Bold, color.FgCyan),
-		target:  mk(color.Bold, color.FgMagenta),
-		label:   mk(color.Bold, color.FgBlue),
-		value:   mk(color.Bold),
+		heading: mk(color.Bold, color.FgHiCyan),
+		target:  mk(color.Bold, color.FgHiMagenta),
+		label:   mk(color.Bold, color.FgHiBlue),
+		value:   mk(color.Bold, color.FgHiWhite),
 		dim:     mk(color.Faint),
-		ok:      mk(color.FgGreen),
-		warn:    mk(color.FgYellow),
-		bad:     mk(color.FgRed),
+		ok:      mk(color.FgHiGreen),
+		warn:    mk(color.FgHiYellow),
+		bad:     mk(color.FgHiRed),
 	}
 }
 
