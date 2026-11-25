@@ -1,0 +1,183 @@
+// Package scan connects to a Target without verification and captures the
+// Presented chain (see ADR-0002).
+package scan
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
+	"fmt"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Target is a host, port and optional SNI name to scan.
+type Target struct {
+	Host string
+	Port int
+	SNI  string
+}
+
+// Address returns host:port, bracketing IPv6 literals.
+func (t Target) Address() string {
+	return net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
+}
+
+// ParseTarget accepts host, host:port and https://host[:port].
+func ParseTarget(s string) (Target, error) {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return Target{}, fmt.Errorf("empty target")
+	}
+	if strings.Contains(raw, "://") {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return Target{}, fmt.Errorf("invalid target %q: %w", s, err)
+		}
+		if u.Scheme != "https" {
+			return Target{}, fmt.Errorf("unsupported scheme %q in %q (only https)", u.Scheme, s)
+		}
+		raw = u.Host
+	}
+	host, portStr, err := net.SplitHostPort(raw)
+	if err != nil {
+		// No port: bare host, possibly a bracketed or bare IPv6 literal.
+		host, portStr = strings.Trim(raw, "[]"), ""
+	}
+	if host == "" {
+		return Target{}, fmt.Errorf("invalid target %q: missing host", s)
+	}
+	port := 443
+	if portStr != "" {
+		port, err = strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			return Target{}, fmt.Errorf("invalid port %q in %q", portStr, s)
+		}
+	}
+	return Target{Host: host, Port: port}, nil
+}
+
+// Options control how a Scan connects.
+type Options struct {
+	Timeout time.Duration
+	// Network is "tcp", "tcp4" or "tcp6".
+	Network string
+	// SNI overrides the server name; defaults to the Target host.
+	SNI string
+}
+
+// Certificate describes one certificate of the Presented chain.
+type Certificate struct {
+	Subject       string
+	SANs          []string
+	Issuer        string
+	Serial        string
+	NotBefore     time.Time
+	NotAfter      time.Time
+	DaysRemaining int
+	SigAlgorithm  string
+	KeyType       string
+	KeyBits       int
+	SHA256        string
+	PEM           string
+}
+
+// Result is the outcome of scanning one Target.
+type Result struct {
+	Target     Target
+	TLSVersion string
+	Chain      []Certificate
+	Err        error
+}
+
+// Scan connects to t, completes the handshake without verifying it and
+// returns the Presented chain in the order received.
+func Scan(ctx context.Context, t Target, opts Options) Result {
+	res := Result{Target: t}
+	if opts.Timeout <= 0 {
+		opts.Timeout = 5 * time.Second
+	}
+	network := opts.Network
+	if network == "" {
+		network = "tcp"
+	}
+	sni := opts.SNI
+	if sni == "" {
+		sni = t.Host
+	}
+	t.SNI = sni
+	res.Target = t
+
+	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
+
+	cfg := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // scanner inspects untrusted chains by design, see ADR-0002
+		MinVersion:         tls.VersionTLS10,
+	}
+	if net.ParseIP(sni) == nil {
+		cfg.ServerName = sni
+	}
+	dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
+	conn, err := dialer.DialContext(ctx, network, t.Address())
+	if err != nil {
+		res.Err = err
+		return res
+	}
+	defer func() { _ = conn.Close() }()
+
+	state := conn.(*tls.Conn).ConnectionState()
+	res.TLSVersion = tls.VersionName(state.Version)
+	for _, c := range state.PeerCertificates {
+		res.Chain = append(res.Chain, describe(c, time.Now()))
+	}
+	return res
+}
+
+func describe(c *x509.Certificate, now time.Time) Certificate {
+	sans := append([]string{}, c.DNSNames...)
+	for _, ip := range c.IPAddresses {
+		sans = append(sans, ip.String())
+	}
+	sans = append(sans, c.EmailAddresses...)
+	for _, u := range c.URIs {
+		sans = append(sans, u.String())
+	}
+	sum := sha256.Sum256(c.Raw)
+	kt, kb := keyInfo(c)
+	return Certificate{
+		Subject:       c.Subject.String(),
+		SANs:          sans,
+		Issuer:        c.Issuer.String(),
+		Serial:        c.SerialNumber.Text(16),
+		NotBefore:     c.NotBefore,
+		NotAfter:      c.NotAfter,
+		DaysRemaining: int(c.NotAfter.Sub(now).Hours() / 24),
+		SigAlgorithm:  c.SignatureAlgorithm.String(),
+		KeyType:       kt,
+		KeyBits:       kb,
+		SHA256:        hex.EncodeToString(sum[:]),
+		PEM:           string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})),
+	}
+}
+
+func keyInfo(c *x509.Certificate) (string, int) {
+	switch k := c.PublicKey.(type) {
+	case *rsa.PublicKey:
+		return "RSA", k.N.BitLen()
+	case *ecdsa.PublicKey:
+		return "ECDSA", k.Curve.Params().BitSize
+	case ed25519.PublicKey:
+		return "Ed25519", 256
+	}
+	return c.PublicKeyAlgorithm.String(), 0
+}
