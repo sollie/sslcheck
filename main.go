@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mattn/go-isatty"
@@ -30,13 +32,16 @@ func main() {
 			env[k] = v
 		}
 	}
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, env))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, env)
+	stop()
+	os.Exit(code)
 }
 
 // run is the testable entry point. It returns the process exit code:
 // 0 when every Scan completed, 1 for connection and usage errors, and 2 when
 // --strict is given and any Verdict fails.
-func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer, env map[string]string) int {
 	fs := pflag.NewFlagSet("sslcheck", pflag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
@@ -72,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		return 0
 	}
 	if *update {
-		return updateData(stdout, stderr, env)
+		return updateData(ctx, stdout, stderr, env)
 	}
 	if fs.NArg() == 0 {
 		_, _ = fmt.Fprintln(stderr, "sslcheck: no target given")
@@ -126,7 +131,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 
 	opts.Stores = stores
 	opts.Concurrency = *conc
-	results := scan.ScanAll(context.Background(), targets, opts)
+	results := scan.ScanAll(ctx, targets, opts)
 	code := 0
 	verdictFailed := false
 	for _, r := range results {
@@ -152,8 +157,8 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 }
 
 // updateData implements --update-trust-store.
-func updateData(stdout, stderr io.Writer, env map[string]string) int {
-	res, err := truststore.Update(context.Background(), env, truststore.HTTPClient())
+func updateData(ctx context.Context, stdout, stderr io.Writer, env map[string]string) int {
+	res, err := truststore.Update(ctx, env, truststore.HTTPClient())
 	switch {
 	case errors.Is(err, refresh.ErrNotNewer):
 		_, _ = fmt.Fprintln(stdout, "Trust store is already up to date")
@@ -164,7 +169,7 @@ func updateData(stdout, stderr io.Writer, env map[string]string) int {
 		_, _ = fmt.Fprintf(stdout, "Trust store updated: %d certificates, dated %s, stored in %s\n",
 			res.Count, res.Date.UTC().Format(time.DateOnly), res.Path)
 	}
-	list, err := ct.Update(context.Background(), env, truststore.HTTPClient())
+	list, err := ct.Update(ctx, env, truststore.HTTPClient())
 	switch {
 	case errors.Is(err, refresh.ErrNotNewer):
 		_, _ = fmt.Fprintln(stdout, "CT log list is already up to date")
