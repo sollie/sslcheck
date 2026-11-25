@@ -72,7 +72,7 @@ func TestSCTsFromTLSExtensionAndStapledOCSP(t *testing.T) {
 	}
 	rep := decode(t, "json", out)
 	r := rep.Results[0]
-	if r.SCTCount != 2 || r.SCTValid != 2 {
+	if r.SCTCount == nil || *r.SCTCount != 2 || r.SCTValid == nil || *r.SCTValid != 2 {
 		t.Fatalf("want 2 valid SCTs, got %+v", r)
 	}
 	sources := map[string]string{}

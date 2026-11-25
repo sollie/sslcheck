@@ -34,8 +34,9 @@ type Result struct {
 	// Verdicts holds one Verdict per Trust store; absent when the scan failed.
 	Verdicts []Verdict `json:"verdicts,omitempty" yaml:"verdicts,omitempty" toml:"verdicts,omitempty"`
 	// SCTCount is the number of SCTs found and SCTValid the number of distinct logs with a valid one.
-	SCTCount   int    `json:"sct_count" yaml:"sct_count" toml:"sct_count"`
-	SCTValid   int    `json:"sct_valid" yaml:"sct_valid" toml:"sct_valid"`
+	// Both are absent when the Scan failed, so a failure is not read as zero SCTs.
+	SCTCount   *int   `json:"sct_count,omitempty" yaml:"sct_count,omitempty" toml:"sct_count,omitempty"`
+	SCTValid   *int   `json:"sct_valid,omitempty" yaml:"sct_valid,omitempty" toml:"sct_valid,omitempty"`
 	SCTLogList string `json:"sct_log_list,omitempty" yaml:"sct_log_list,omitempty" toml:"sct_log_list,omitempty"`
 }
 
@@ -126,8 +127,9 @@ func NewReport(results []scan.Result, withPEM bool) Report {
 			}
 			out.Chain = append(out.Chain, cert)
 		}
-		if r.CT != nil {
-			out.SCTCount, out.SCTValid, out.SCTLogList = len(r.CT.SCTs), r.CT.Valid, r.CT.LogList
+		if r.CT != nil && r.Err == nil {
+			count, valid := len(r.CT.SCTs), r.CT.Valid
+			out.SCTCount, out.SCTValid, out.SCTLogList = &count, &valid, r.CT.LogList
 			for _, s := range r.CT.SCTs {
 				ts := ""
 				if !s.Timestamp.IsZero() {

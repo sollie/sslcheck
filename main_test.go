@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -335,5 +336,36 @@ func TestPlaintextAfterSTARTTLSGoAheadFailsScan(t *testing.T) {
 				t.Errorf("exit %d, want clear plaintext error:\n%s", code, out)
 			}
 		})
+	}
+}
+
+func TestPrettyReportEscapesControlCharactersVisibly(t *testing.T) {
+	leaf := testutil.SelfSigned(t, testutil.CertOpts{CommonName: "evil\x1b[31m.test", DNSNames: []string{"san\x07.test"}})
+	srv := testutil.StartTLS(t, leaf)
+
+	code, out, errs := runCLI(t, nil, "--no-color", srv.Addr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errs)
+	}
+	if strings.ContainsAny(out, "\x1b\x07") {
+		t.Errorf("raw control characters reached the terminal: %q", out)
+	}
+	for _, want := range []string{`evil\x1b[31m.test`, `san\x07.test`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing escaped %q:\n%s", want, out)
+		}
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestPrettyWriteFailureIsReported(t *testing.T) {
+	srv := testutil.StartTLS(t, testutil.SelfSigned(t, testutil.CertOpts{CommonName: "w.test"}))
+	var errb bytes.Buffer
+	code := run([]string{"--no-color", srv.Addr}, failingWriter{}, &errb, map[string]string{})
+	if code == 0 || !strings.Contains(errb.String(), "disk full") {
+		t.Errorf("exit %d, stderr: %q", code, errb.String())
 	}
 }

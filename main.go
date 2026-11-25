@@ -135,10 +135,14 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		}
 		verdictFailed = verdictFailed || r.Failed()
 	}
+	var werr error
 	if *format == "pretty" {
-		render.PrettyPEM(stdout, results, colorLevel(stdout, env, *noColor), *withPEM)
-	} else if err := render.Structured(stdout, render.NewReport(results, *withPEM), *format); err != nil {
-		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
+		werr = render.PrettyPEM(stdout, results, colorLevel(stdout, env, *noColor), *withPEM)
+	} else {
+		werr = render.Structured(stdout, render.NewReport(results, *withPEM), *format)
+	}
+	if werr != nil {
+		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", werr)
 		return 1
 	}
 	if *strict && verdictFailed {
