@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BurntSushi/toml"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/sollie/sslcheck/internal/render"
 	"github.com/sollie/sslcheck/internal/testutil"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func decode(t *testing.T, format, out string) render.Report {

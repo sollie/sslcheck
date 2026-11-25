@@ -6,9 +6,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/BurntSushi/toml"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/sollie/sslcheck/internal/scan"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // SchemaVersion is bumped on incompatible changes to the structured output.
