@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -82,15 +83,41 @@ func parseBundle(data []byte) (bundle, error) {
 
 // HTTPClient returns the client used for updates. When the system has no root
 // certificates (for example in a scratch container) it trusts the embedded
-// Mozilla bundle, so HTTPS downloads still work.
-func HTTPClient() *http.Client {
+// Mozilla bundle, so HTTPS downloads still work. SSL_CERT_FILE in env adds
+// roots from that file. Redirects from HTTPS to HTTP are refused.
+func HTTPClient(env map[string]string) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
-	if pool, err := x509.SystemCertPool(); err != nil || pool.Equal(x509.NewCertPool()) {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool.Equal(x509.NewCertPool()) {
+		pool = nil
 		if emb, err := Embedded(); err == nil {
-			tr.TLSClientConfig = &tls.Config{RootCAs: emb.Roots, MinVersion: tls.VersionTLS12}
+			pool = emb.Roots
 		}
 	}
-	return &http.Client{Timeout: 30 * time.Second, Transport: tr}
+	if file := env["SSL_CERT_FILE"]; file != "" {
+		if pem, err := os.ReadFile(file); err == nil { //nolint:gosec // operator-supplied roots
+			if pool == nil {
+				pool = x509.NewCertPool()
+			}
+			pool.AppendCertsFromPEM(pem)
+		}
+	}
+	if pool != nil {
+		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	}
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			if via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
+				return fmt.Errorf("refusing redirect from HTTPS to %s", req.URL.Redacted())
+			}
+			return nil
+		},
+	}
 }
 
 // Update downloads the Mozilla bundle and its SHA-256 and stores it in the
@@ -99,7 +126,7 @@ func HTTPClient() *http.Client {
 // checksum guards integrity, not authenticity. A nil client uses HTTPClient.
 func Update(ctx context.Context, env map[string]string, client *http.Client) (refresh.Result, error) {
 	if client == nil {
-		client = HTTPClient()
+		client = HTTPClient(env)
 	}
 	emb, err := Embedded()
 	if err != nil {

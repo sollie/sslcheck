@@ -154,7 +154,7 @@ func Load(env map[string]string) (LogList, error) {
 // directory. Nothing is written unless the list parses and is newer than the
 // embedded one. The list's own signature is not checked; it only decides which
 // logs may raise warnings, never a failure. A nil client uses http.DefaultClient;
-// pass truststore.HTTPClient() where the system may have no root certificates.
+// pass truststore.HTTPClient(env) where the system may have no root certificates.
 func Update(ctx context.Context, env map[string]string, client *http.Client) (refresh.Result, error) {
 	emb, err := Embedded()
 	if err != nil {
