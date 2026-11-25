@@ -11,9 +11,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/ocsp"
+
+	"github.com/sollie/sslcheck/internal/issuer"
 )
 
 // Status is the Revocation status of a certificate.
@@ -39,6 +42,12 @@ const (
 const (
 	maxOCSPBytes = 1 << 20
 	maxCRLBytes  = 16 << 20
+
+	// MaxAge is how old a response or CRL without a next-update time may be
+	// before it is reported as unknown.
+	MaxAge = 7 * 24 * time.Hour
+	// clockSkew is how far in the future a response may claim to be issued.
+	clockSkew = 5 * time.Minute
 )
 
 // Result is the Revocation status of one certificate from one source.
@@ -53,14 +62,17 @@ type Result struct {
 
 // Check returns the stapled result for the leaf, if a staple was presented,
 // and, when live is set, live OCSP (or CRL when there is no OCSP URL) results
-// for every certificate except the root. Live lookups honour ctx.
-func Check(ctx context.Context, chain []*x509.Certificate, staple []byte, live bool, now time.Time) []Result {
+// for every certificate except the root. Issuers are resolved with
+// issuer.Find, using roots for the last presented certificate. Responses count
+// only when authenticated by the issuer or a valid delegated responder.
+// Live lookups honour ctx.
+func Check(ctx context.Context, chain []*x509.Certificate, staple []byte, live bool, roots []*x509.CertPool, now time.Time) []Result {
 	var out []Result
 	if len(chain) == 0 {
 		return out
 	}
 	if len(staple) > 0 {
-		out = append(out, checkStaple(chain, staple, now))
+		out = append(out, checkStaple(chain, staple, roots, now))
 	}
 	if !live {
 		return out
@@ -70,11 +82,7 @@ func Check(ctx context.Context, chain []*x509.Certificate, staple []byte, live b
 		if isRoot(c) {
 			continue
 		}
-		var issuer *x509.Certificate
-		if i+1 < len(chain) {
-			issuer = chain[i+1]
-		}
-		out = append(out, checkLive(ctx, client, i, c, issuer, now))
+		out = append(out, checkLive(ctx, client, i, c, issuer.Find(chain, i, roots, now), now))
 	}
 	return out
 }
@@ -83,17 +91,56 @@ func isRoot(c *x509.Certificate) bool {
 	return bytes.Equal(c.RawSubject, c.RawIssuer) && c.CheckSignatureFrom(c) == nil
 }
 
-func checkStaple(chain []*x509.Certificate, staple []byte, now time.Time) Result {
-	var issuer *x509.Certificate
-	if len(chain) > 1 {
-		issuer = chain[1]
-	}
+func checkStaple(chain []*x509.Certificate, staple []byte, roots []*x509.CertPool, now time.Time) Result {
 	r := Result{Cert: 0, Source: Staple}
-	resp, err := ocsp.ParseResponseForCert(staple, chain[0], issuer)
-	if err != nil {
-		return unknown(r, fmt.Sprintf("stapled OCSP response unusable: %v", err))
+	iss := issuer.Find(chain, 0, roots, now)
+	if iss == nil {
+		return unknown(r, "issuer not available to authenticate the stapled OCSP response")
 	}
-	return fromOCSP(r, resp, now, "stapled response")
+	return parseOCSP(r, staple, chain[0], iss, now, "stapled response")
+}
+
+// parseOCSP is the single validation path for stapled and live responses.
+func parseOCSP(r Result, data []byte, c, iss *x509.Certificate, now time.Time, from string) Result {
+	resp, err := ocsp.ParseResponseForCert(data, c, iss)
+	if err != nil {
+		return unknown(r, fmt.Sprintf("%s unusable: %v", from, err))
+	}
+	if err := checkResponder(resp.Certificate, iss, now); err != nil {
+		return unknown(r, fmt.Sprintf("%s not authenticated: %v", from, err))
+	}
+	if err := checkFresh(resp.ThisUpdate, resp.NextUpdate, now); err != nil {
+		return unknown(r, fmt.Sprintf("%s: %v", from, err))
+	}
+	return fromOCSP(r, resp, now, from)
+}
+
+// checkResponder accepts a delegated responder certificate only when it can
+// sign OCSP responses and is valid at now. The signature chain to the issuer
+// has already been checked by the OCSP parser.
+func checkResponder(responder, iss *x509.Certificate, now time.Time) error {
+	if responder == nil || bytes.Equal(responder.Raw, iss.Raw) {
+		return nil
+	}
+	if !slices.Contains(responder.ExtKeyUsage, x509.ExtKeyUsageOCSPSigning) {
+		return errors.New("responder certificate lacks the OCSP-signing usage")
+	}
+	if now.Before(responder.NotBefore) || now.After(responder.NotAfter) {
+		return errors.New("responder certificate is not valid now")
+	}
+	return nil
+}
+
+// checkFresh rejects responses issued in the future and, without a
+// next-update time, responses older than MaxAge.
+func checkFresh(thisUpdate, nextUpdate, now time.Time) error {
+	if thisUpdate.After(now.Add(clockSkew)) {
+		return errors.New("issued in the future")
+	}
+	if nextUpdate.IsZero() && now.Sub(thisUpdate) > MaxAge {
+		return errors.New("too old and has no next-update time")
+	}
+	return nil
 }
 
 func fromOCSP(r Result, resp *ocsp.Response, now time.Time, from string) Result {
@@ -118,23 +165,23 @@ func unknown(r Result, detail string) Result {
 	return r
 }
 
-func checkLive(ctx context.Context, client *http.Client, idx int, c, issuer *x509.Certificate, now time.Time) Result {
+func checkLive(ctx context.Context, client *http.Client, idx int, c, iss *x509.Certificate, now time.Time) Result {
 	r := Result{Cert: idx, Source: OCSP}
-	if issuer == nil || c.CheckSignatureFrom(issuer) != nil {
-		return unknown(r, "issuer not in the Presented chain")
+	if iss == nil || c.CheckSignatureFrom(iss) != nil {
+		return unknown(r, "issuer not found in the Presented chain or Trust store")
 	}
 	var errs []error
 	for _, u := range c.OCSPServer {
-		res, err := queryOCSP(ctx, client, u, c, issuer, now)
+		res, err := queryOCSP(ctx, client, u, c, iss, now)
 		if err == nil {
 			return withSource(res, idx, OCSP)
 		}
 		errs = append(errs, err)
 	}
-	if len(c.OCSPServer) == 0 {
+	if len(c.OCSPServer) == 0 && len(c.CRLDistributionPoints) > 0 {
 		r.Source = CRL
 		for _, u := range c.CRLDistributionPoints {
-			res, err := queryCRL(ctx, client, u, c, issuer, now)
+			res, err := queryCRL(ctx, client, u, c, iss, now)
 			if err == nil {
 				return withSource(res, idx, CRL)
 			}
@@ -179,8 +226,8 @@ func fetch(ctx context.Context, client *http.Client, method, rawURL string, body
 	return data, nil
 }
 
-func queryOCSP(ctx context.Context, client *http.Client, u string, c, issuer *x509.Certificate, now time.Time) (Result, error) {
-	reqBody, err := ocsp.CreateRequest(c, issuer, nil)
+func queryOCSP(ctx context.Context, client *http.Client, u string, c, iss *x509.Certificate, now time.Time) (Result, error) {
+	reqBody, err := ocsp.CreateRequest(c, iss, nil)
 	if err != nil {
 		return Result{}, err
 	}
@@ -188,14 +235,10 @@ func queryOCSP(ctx context.Context, client *http.Client, u string, c, issuer *x5
 	if err != nil {
 		return Result{}, err
 	}
-	resp, err := ocsp.ParseResponseForCert(data, c, issuer)
-	if err != nil {
-		return Result{}, fmt.Errorf("%s: %w", u, err)
-	}
-	return fromOCSP(Result{}, resp, now, u), nil
+	return parseOCSP(Result{}, data, c, iss, now, u), nil
 }
 
-func queryCRL(ctx context.Context, client *http.Client, u string, c, issuer *x509.Certificate, now time.Time) (Result, error) {
+func queryCRL(ctx context.Context, client *http.Client, u string, c, iss *x509.Certificate, now time.Time) (Result, error) {
 	data, err := fetch(ctx, client, http.MethodGet, u, nil, "", maxCRLBytes)
 	if err != nil {
 		return Result{}, err
@@ -204,8 +247,11 @@ func queryCRL(ctx context.Context, client *http.Client, u string, c, issuer *x50
 	if err != nil {
 		return Result{}, fmt.Errorf("%s: %w", u, err)
 	}
-	if err := crl.CheckSignatureFrom(issuer); err != nil {
+	if err := crl.CheckSignatureFrom(iss); err != nil {
 		return Result{}, fmt.Errorf("%s: %w", u, err)
+	}
+	if err := checkFresh(crl.ThisUpdate, crl.NextUpdate, now); err != nil {
+		return Result{Status: Unknown, Detail: fmt.Sprintf("%s: CRL %v", u, err)}, nil
 	}
 	if !crl.NextUpdate.IsZero() && now.After(crl.NextUpdate) {
 		return Result{Status: Unknown, Detail: u + ": CRL is out of date"}, nil

@@ -1,7 +1,6 @@
 package ct
 
 import (
-	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
@@ -11,6 +10,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/sollie/sslcheck/internal/issuer"
 	"time"
 
 	"golang.org/x/crypto/cryptobyte"
@@ -65,8 +65,8 @@ type rawSCT struct {
 
 // Verify collects the SCTs from the leaf certificate, the TLS extension
 // (tlsSCTs, one SCT per element) and the stapled OCSP response, and verifies
-// each against list. now is used to reject timestamps from the future.
-func Verify(list LogList, chain []*x509.Certificate, tlsSCTs [][]byte, staple []byte, now time.Time) Result {
+// each against list. The leaf issuer is resolved with issuer.Find using roots. now is used to reject timestamps from the future.
+func Verify(list LogList, chain []*x509.Certificate, roots []*x509.CertPool, tlsSCTs [][]byte, staple []byte, now time.Time) Result {
 	res := Result{LogList: list.Description()}
 	if len(chain) == 0 {
 		return res
@@ -100,13 +100,7 @@ func Verify(list LogList, chain []*x509.Certificate, tlsSCTs [][]byte, staple []
 		}
 	}
 
-	var issuer *x509.Certificate
-	for _, c := range chain[1:] {
-		if bytes.Equal(leaf.RawIssuer, c.RawSubject) && leaf.CheckSignatureFrom(c) == nil {
-			issuer = c
-			break
-		}
-	}
+	issuer := issuer.Find(chain, 0, roots, now)
 	good := map[[32]byte]bool{}
 	for _, r := range raws {
 		s := SCT{

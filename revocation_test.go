@@ -1,8 +1,10 @@
 package main
 
 import (
+	"crypto/x509"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sollie/sslcheck/internal/testutil"
 )
@@ -142,5 +144,103 @@ func TestRevocationInStructuredOutput(t *testing.T) {
 		if len(revs) != 1 || revs[0].Status != "good" || revs[0].Source != "staple" {
 			t.Errorf("%s: leaf revocation = %+v", format, revs)
 		}
+	}
+}
+
+func TestStapleWithoutPresentedIssuerIsUnknown(t *testing.T) {
+	f := newRevFixture(t, testutil.CertOpts{})
+	f.interResp.Revoke(f.leaf)
+	srv := testutil.StartTLSStapled(t, f.interResp.Staple(f.leaf), f.leaf)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--sni", "ok.test", srv.Addr)
+	if !strings.Contains(out, "unknown (staple)") || strings.Contains(out, "revoked") {
+		t.Errorf("unauthenticated staple must be unknown:\n%s", out)
+	}
+}
+
+func TestStapleSignedByOrdinaryServerCertIsUnknown(t *testing.T) {
+	f := newRevFixture(t, testutil.CertOpts{})
+	other := f.inter.Issue(t, testutil.CertOpts{CommonName: "other.test", DNSNames: []string{"other.test"}})
+	f.interResp.SignWith(other)
+	srv := testutil.StartTLSStapled(t, f.interResp.Staple(f.leaf), f.leaf, &f.inter.Cert)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--sni", "ok.test", srv.Addr)
+	if !strings.Contains(out, "unknown (staple)") || strings.Contains(out, "good (staple)") {
+		t.Errorf("response signed by a server certificate must be unknown:\n%s", out)
+	}
+}
+
+func TestStapleSignedByDelegatedResponderIsAccepted(t *testing.T) {
+	f := newRevFixture(t, testutil.CertOpts{})
+	del := f.inter.Issue(t, testutil.CertOpts{CommonName: "responder", ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning}})
+	f.interResp.SignWith(del)
+	srv := testutil.StartTLSStapled(t, f.interResp.Staple(f.leaf), f.leaf, &f.inter.Cert)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--sni", "ok.test", srv.Addr)
+	if !strings.Contains(out, "good (staple)") {
+		t.Errorf("delegated responder should be accepted:\n%s", out)
+	}
+}
+
+func TestStapleFreshnessBounds(t *testing.T) {
+	for name, tc := range map[string]struct {
+		age    time.Duration
+		noNext bool
+	}{
+		"future issue time":            {-time.Hour, false},
+		"over-age without next-update": {30 * 24 * time.Hour, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newRevFixture(t, testutil.CertOpts{})
+			f.interResp.IssuedAgo(tc.age, tc.noNext)
+			srv := testutil.StartTLSStapled(t, f.interResp.Staple(f.leaf), f.leaf, &f.inter.Cert)
+
+			_, out, _ := runCLI(t, f.env, "--no-color", "--sni", "ok.test", srv.Addr)
+			if !strings.Contains(out, "unknown (staple)") {
+				t.Errorf("expected unknown:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestStapleRecentWithoutNextUpdateIsGood(t *testing.T) {
+	f := newRevFixture(t, testutil.CertOpts{})
+	f.interResp.IssuedAgo(time.Hour, true)
+	srv := testutil.StartTLSStapled(t, f.interResp.Staple(f.leaf), f.leaf, &f.inter.Cert)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--sni", "ok.test", srv.Addr)
+	if !strings.Contains(out, "good (staple)") {
+		t.Errorf("expected good:\n%s", out)
+	}
+}
+
+func TestLiveRevocationResolvesIssuerFromTrustStoreAndAnyOrder(t *testing.T) {
+	for name, order := range map[string]func(f *revFixture) []*testutil.Cert{
+		"leaf and intermediate": func(f *revFixture) []*testutil.Cert { return []*testutil.Cert{&f.inter.Cert} },
+		"out of order":          func(f *revFixture) []*testutil.Cert { return []*testutil.Cert{&f.root.Cert, &f.inter.Cert} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newRevFixture(t, testutil.CertOpts{})
+			srv := testutil.StartTLS(t, f.leaf, order(f)...)
+
+			_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--sni", "ok.test", srv.Addr)
+			if strings.Contains(out, "unknown (") {
+				t.Errorf("spurious unknown:\n%s", out)
+			}
+			if got := strings.Count(out, "good (ocsp)"); got != 2 {
+				t.Errorf("good (ocsp) count = %d, want 2:\n%s", got, out)
+			}
+		})
+	}
+}
+
+func TestNoRevocationURLIsNotLabelledCRL(t *testing.T) {
+	f := newRevFixture(t, testutil.CertOpts{})
+	f.leaf = f.inter.Issue(t, testutil.CertOpts{CommonName: "ok.test", DNSNames: []string{"ok.test"}})
+	srv := testutil.StartTLS(t, f.leaf, &f.inter.Cert)
+
+	_, out, _ := runCLI(t, f.env, "--no-color", "--revocation", "--sni", "ok.test", srv.Addr)
+	if strings.Contains(out, "(crl)") {
+		t.Errorf("source mislabelled as CRL:\n%s", out)
 	}
 }

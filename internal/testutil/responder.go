@@ -25,6 +25,9 @@ type Responder struct {
 	srv     *httptest.Server
 	hits    atomic.Int64
 	mu      sync.Mutex
+	signer  *Cert
+	age     time.Duration
+	noNext  bool
 	revoked map[string]bool
 }
 
@@ -57,6 +60,22 @@ func (r *Responder) Revoke(c *Cert) {
 	r.revoked[c.Leaf.SerialNumber.String()] = true
 }
 
+// SignWith makes the responder sign with c, a certificate issued by the CA,
+// and embed it in responses, as a delegated responder does.
+func (r *Responder) SignWith(c *Cert) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.signer = c
+}
+
+// IssuedAgo sets how long ago responses were issued (negative for the future)
+// and, with noNextUpdate, leaves out their next-update time.
+func (r *Responder) IssuedAgo(d time.Duration, noNextUpdate bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.age, r.noNext = d, noNextUpdate
+}
+
 // Close stops the responder, making it unreachable.
 func (r *Responder) Close() { r.srv.Close() }
 
@@ -67,10 +86,16 @@ func (r *Responder) isRevoked(serial *big.Int) bool {
 }
 
 func (r *Responder) ocspResponse(serial *big.Int, extra ...pkix.Extension) []byte {
+	r.mu.Lock()
+	signer, age, noNext := r.signer, r.age, r.noNext
+	r.mu.Unlock()
+	if age == 0 {
+		age = time.Hour
+	}
 	tmpl := ocsp.Response{
 		Status:       ocsp.Good,
 		SerialNumber: serial,
-		ThisUpdate:   time.Now().Add(-time.Hour),
+		ThisUpdate:   time.Now().Add(-age),
 		NextUpdate:   time.Now().Add(24 * time.Hour),
 
 		ExtraExtensions: extra,
@@ -79,7 +104,15 @@ func (r *Responder) ocspResponse(serial *big.Int, extra ...pkix.Extension) []byt
 		tmpl.Status = ocsp.Revoked
 		tmpl.RevokedAt = time.Now().Add(-time.Minute)
 	}
-	der, err := ocsp.CreateResponse(r.ca.Leaf, r.ca.Leaf, tmpl, r.ca.Key)
+	if noNext {
+		tmpl.NextUpdate = time.Time{}
+	}
+	responder, key := r.ca.Leaf, r.ca.Key
+	if signer != nil {
+		responder, key = signer.Leaf, signer.Key
+		tmpl.Certificate = signer.Leaf
+	}
+	der, err := ocsp.CreateResponse(r.ca.Leaf, responder, tmpl, key)
 	if err != nil {
 		panic(err)
 	}
