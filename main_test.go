@@ -300,3 +300,40 @@ func TestVersionFlagPrintsVersion(t *testing.T) {
 		t.Fatalf("exit %d, stdout %q", code, out)
 	}
 }
+
+func TestHostileSTARTTLSRepliesFailOnlyThatTarget(t *testing.T) {
+	cases := []struct{ proto, behaviour string }{
+		{"smtp", testutil.HostileBareCode},
+		{"smtp", testutil.HostileEndlessLine},
+		{"smtp", testutil.HostileEndlessReply},
+		{"imap", testutil.HostileEndlessLine},
+		{"pop3", testutil.HostileEndlessLine},
+	}
+	for _, c := range cases {
+		t.Run(c.proto+"/"+c.behaviour, func(t *testing.T) {
+			good := testutil.StartTLS(t, testutil.SelfSigned(t, testutil.CertOpts{CommonName: "good.test"}))
+			bad := testutil.StartHostileSTARTTLS(t, c.proto, c.behaviour)
+
+			code, out, _ := runCLI(t, nil, "--no-color", "--timeout", "10s", "--starttls", c.proto, bad.Addr)
+			if code != 1 || !strings.Contains(out, "STARTTLS "+c.proto) {
+				t.Errorf("exit %d, want 1 with STARTTLS error:\n%s", code, out)
+			}
+			code, out, _ = runCLI(t, nil, "--no-color", "--timeout", "10s", "--starttls", "none", good.Addr)
+			if code != 0 || !strings.Contains(out, "good.test") {
+				t.Errorf("other target: exit %d\n%s", code, out)
+			}
+		})
+	}
+}
+
+func TestPlaintextAfterSTARTTLSGoAheadFailsScan(t *testing.T) {
+	for _, proto := range []string{"smtp", "imap", "pop3"} {
+		t.Run(proto, func(t *testing.T) {
+			bad := testutil.StartHostileSTARTTLS(t, proto, testutil.HostileExtraPlaintext)
+			code, out, _ := runCLI(t, nil, "--no-color", "--timeout", "10s", "--starttls", proto, bad.Addr)
+			if code != 1 || !strings.Contains(out, "unexpected data after STARTTLS go-ahead") {
+				t.Errorf("exit %d, want clear plaintext error:\n%s", code, out)
+			}
+		})
+	}
+}

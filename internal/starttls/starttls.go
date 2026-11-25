@@ -4,6 +4,7 @@ package starttls
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -42,10 +43,17 @@ func Valid(p string) bool {
 	return false
 }
 
+// Bounds on what a server may send during the plaintext dialogue.
+const (
+	maxLineBytes  = 4096
+	maxReplyLines = 100
+	maxTotalBytes = 64 * 1024
+)
+
 // Upgrade runs the STARTTLS exchange for proto on conn. On success the next
 // bytes on conn are the TLS handshake.
 func Upgrade(conn net.Conn, proto string) error {
-	br := bufio.NewReader(conn)
+	br := &reader{Reader: bufio.NewReader(conn)}
 	var err error
 	switch proto {
 	case "smtp":
@@ -57,39 +65,62 @@ func Upgrade(conn net.Conn, proto string) error {
 	default:
 		err = fmt.Errorf("unsupported protocol")
 	}
+	if err == nil && br.Buffered() > 0 {
+		err = errors.New("unexpected data after STARTTLS go-ahead")
+	}
 	if err != nil {
 		return fmt.Errorf("STARTTLS %s: %w", proto, err)
 	}
 	return nil
 }
 
-func line(br *bufio.Reader) (string, error) {
-	s, err := br.ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("reading reply: %w", err)
+// reader bounds the bytes a server can make us read during the dialogue.
+type reader struct {
+	*bufio.Reader
+	total int
+}
+
+func line(br *reader) (string, error) {
+	var buf []byte
+	for {
+		frag, err := br.ReadSlice('\n')
+		buf = append(buf, frag...)
+		br.total += len(frag)
+		switch {
+		case br.total > maxTotalBytes:
+			return "", fmt.Errorf("reply exceeds %d bytes", maxTotalBytes)
+		case len(buf) > maxLineBytes:
+			return "", fmt.Errorf("reply line exceeds %d bytes", maxLineBytes)
+		case err == nil:
+			return strings.TrimRight(string(buf), "\r\n"), nil
+		case !errors.Is(err, bufio.ErrBufferFull):
+			return "", fmt.Errorf("reading reply: %w", err)
+		}
 	}
-	return strings.TrimRight(s, "\r\n"), nil
 }
 
 // smtpReply reads a possibly multi-line reply and returns its code and lines.
-func smtpReply(br *bufio.Reader) (string, []string, error) {
+func smtpReply(br *reader) (string, []string, error) {
 	var lines []string
 	for {
 		l, err := line(br)
 		if err != nil {
 			return "", nil, err
 		}
-		if len(l) < 3 {
+		if len(l) < 3 || (len(l) > 3 && l[3] != '-' && l[3] != ' ') {
 			return "", nil, fmt.Errorf("malformed reply %q", l)
 		}
 		lines = append(lines, l)
 		if len(l) == 3 || l[3] != '-' {
 			return l[:3], lines, nil
 		}
+		if len(lines) >= maxReplyLines {
+			return "", nil, fmt.Errorf("reply exceeds %d lines", maxReplyLines)
+		}
 	}
 }
 
-func smtp(conn net.Conn, br *bufio.Reader) error {
+func smtp(conn net.Conn, br *reader) error {
 	if code, lines, err := smtpReply(br); err != nil {
 		return err
 	} else if code != "220" {
@@ -107,6 +138,9 @@ func smtp(conn net.Conn, br *bufio.Reader) error {
 	}
 	offered := false
 	for _, l := range lines[1:] {
+		if len(l) < 4 {
+			continue
+		}
 		if strings.EqualFold(strings.TrimSpace(l[4:]), "STARTTLS") {
 			offered = true
 		}
@@ -125,7 +159,7 @@ func smtp(conn net.Conn, br *bufio.Reader) error {
 	return nil
 }
 
-func imap(conn net.Conn, br *bufio.Reader) error {
+func imap(conn net.Conn, br *reader) error {
 	greeting, err := line(br)
 	if err != nil {
 		return err
@@ -150,7 +184,7 @@ func imap(conn net.Conn, br *bufio.Reader) error {
 	}
 }
 
-func pop3(conn net.Conn, br *bufio.Reader) error {
+func pop3(conn net.Conn, br *reader) error {
 	greeting, err := line(br)
 	if err != nil {
 		return err
