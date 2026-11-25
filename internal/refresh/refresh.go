@@ -8,11 +8,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/sollie/sslcheck/internal/httppolicy"
 )
 
 // EnvCacheDir replaces the OS user cache directory; sslcheck/ is still
@@ -167,24 +168,16 @@ func WriteFileAtomic(path string, data []byte) error {
 
 // Download fetches url, refusing anything over 16 MiB.
 func Download(ctx context.Context, client *http.Client, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("download %s: %w", url, err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("download %s: %w", url, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download %s: %s", url, resp.Status)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownload+1))
-	if err != nil {
-		return nil, fmt.Errorf("download %s: %w", url, err)
-	}
-	if len(data) > maxDownload {
+	data, err := httppolicy.Fetch(ctx, client, http.MethodGet, url, nil, "", maxDownload)
+	var se *httppolicy.StatusError
+	var ze *httppolicy.SizeError
+	switch {
+	case errors.As(err, &se):
+		return nil, fmt.Errorf("download %s: %s", url, se.Status)
+	case errors.As(err, &ze):
 		return nil, fmt.Errorf("download %s: larger than %d bytes", url, maxDownload)
+	case err != nil:
+		return nil, fmt.Errorf("download %s: %w", url, err)
 	}
 	return data, nil
 }
