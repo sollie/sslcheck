@@ -19,39 +19,53 @@ type palette struct {
 	heading, target, label, value, dim, ok, warn, bad *color.Color
 }
 
-// newPalette uses 24-bit colour: sslcheck only targets modern terminals.
-func newPalette(useColor bool) palette {
+// ColorLevel is how much colour the output terminal supports.
+type ColorLevel int
+
+const (
+	ColorNone ColorLevel = iota
+	// Color16 uses the bright ANSI colours every colour terminal has.
+	Color16
+	// ColorTrue uses 24-bit colour.
+	ColorTrue
+)
+
+func newPalette(level ColorLevel) palette {
 	set := func(c *color.Color) *color.Color {
-		if useColor {
-			c.EnableColor()
-		} else {
+		if level == ColorNone {
 			c.DisableColor()
+		} else {
+			c.EnableColor()
 		}
 		return c
 	}
-	rgb := func(r, g, b int, a ...color.Attribute) *color.Color {
-		return set(color.RGB(r, g, b).Add(a...))
+	// pick returns the 24-bit colour when supported, else the ANSI fallback.
+	pick := func(r, g, b int, fallback color.Attribute, attrs ...color.Attribute) *color.Color {
+		if level == ColorTrue {
+			return set(color.RGB(r, g, b).Add(attrs...))
+		}
+		return set(color.New(append([]color.Attribute{fallback}, attrs...)...))
 	}
 	return palette{
-		heading: rgb(34, 211, 238, color.Bold),
-		target:  rgb(232, 121, 249, color.Bold),
-		label:   rgb(96, 165, 250, color.Bold),
-		value:   rgb(248, 250, 252, color.Bold),
+		heading: pick(34, 211, 238, color.FgHiCyan, color.Bold),
+		target:  pick(232, 121, 249, color.FgHiMagenta, color.Bold),
+		label:   pick(96, 165, 250, color.FgHiBlue, color.Bold),
+		value:   pick(248, 250, 252, color.FgHiWhite, color.Bold),
 		dim:     set(color.New(color.Faint)),
-		ok:      rgb(74, 222, 128),
-		warn:    rgb(251, 191, 36),
-		bad:     rgb(248, 113, 113),
+		ok:      pick(74, 222, 128, color.FgHiGreen),
+		warn:    pick(251, 191, 36, color.FgHiYellow),
+		bad:     pick(248, 113, 113, color.FgHiRed),
 	}
 }
 
 // Pretty writes a report for each result in the given order.
-func Pretty(w io.Writer, results []scan.Result, useColor bool) {
-	PrettyPEM(w, results, useColor, false)
+func Pretty(w io.Writer, results []scan.Result, level ColorLevel) {
+	PrettyPEM(w, results, level, false)
 }
 
 // PrettyPEM is Pretty, optionally followed by a PEM block per certificate.
-func PrettyPEM(w io.Writer, results []scan.Result, useColor, withPEM bool) {
-	p := newPalette(useColor)
+func PrettyPEM(w io.Writer, results []scan.Result, level ColorLevel, withPEM bool) {
+	p := newPalette(level)
 	for i, r := range results {
 		if i > 0 {
 			_, _ = fmt.Fprintln(w)

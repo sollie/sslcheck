@@ -134,6 +134,16 @@ func TestColourRules(t *testing.T) {
 	if strings.Contains(out, esc) {
 		t.Error("structured output must never be coloured")
 	}
+
+	for _, ct := range []struct {
+		colorterm string
+		truecolor bool
+	}{{"", false}, {"truecolor", true}, {"24bit", true}} {
+		_, out, _ := runCLI(t, map[string]string{"CLICOLOR_FORCE": "1", "COLORTERM": ct.colorterm}, srv.Addr)
+		if got := strings.Contains(out, "38;2;"); got != ct.truecolor {
+			t.Errorf("COLORTERM=%q: truecolor = %v, want %v", ct.colorterm, got, ct.truecolor)
+		}
+	}
 }
 
 func TestStructuredOutputCarriesVerdicts(t *testing.T) {
