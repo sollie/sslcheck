@@ -128,6 +128,13 @@ func PrettyPEM(out io.Writer, results []scan.Result, level ColorLevel, withPEM b
 			continue
 		}
 		_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprint("TLS version:"), tlsVersion(p, r.TLSVersion))
+		if r.CipherSuite != "" {
+			cs := p.ok.Sprint(r.CipherSuite)
+			if r.WeakCipher {
+				cs = p.warn.Sprint(r.CipherSuite)
+			}
+			_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprint("Cipher suite:"), cs)
+		}
 		for n, c := range r.Chain {
 			_, _ = fmt.Fprintf(w, "\n%s\n", p.heading.Sprintf("Certificate %d of %d", n+1, len(r.Chain)))
 			field := func(name, val string) {

@@ -124,7 +124,10 @@ type Certificate struct {
 type Result struct {
 	Target     Target
 	TLSVersion string
-	Chain      []Certificate
+	// CipherSuite is the negotiated cipher suite; WeakCipher is set when it is insecure or lacks forward secrecy.
+	CipherSuite string
+	WeakCipher  bool
+	Chain       []Certificate
 	// Certs is the Presented chain as parsed certificates, in the order received.
 	Certs []*x509.Certificate
 	// Verdicts holds one Verdict per Trust store, with revocation and CT findings
@@ -191,6 +194,7 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 	cfg := &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // scanner inspects untrusted chains by design, see ADR-0002
 		MinVersion:         tls.VersionTLS10,
+		CipherSuites:       scanCipherSuites(),
 	}
 	if net.ParseIP(sni) == nil {
 		cfg.ServerName = sni
@@ -233,6 +237,8 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 
 	state := tlsConn.ConnectionState()
 	res.TLSVersion = tls.VersionName(state.Version)
+	res.CipherSuite = tls.CipherSuiteName(state.CipherSuite)
+	res.WeakCipher = weakCipher(state.CipherSuite)
 	for _, c := range state.PeerCertificates {
 		res.Certs = append(res.Certs, c)
 		res.Chain = append(res.Chain, describe(c, now()))
@@ -255,11 +261,38 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 		res.CT = &r
 	}
 	res.Verdicts = verify.Verify(res.Certs, t.SNI, opts.Stores, now())
+	if res.WeakCipher {
+		verify.ApplyWarning(res.Verdicts, "weak cipher suite "+res.CipherSuite+" negotiated")
+	}
 	verify.ApplyRevocation(res.Verdicts, revs)
 	if res.CT != nil {
 		verify.ApplyCT(res.Verdicts, *res.CT)
 	}
 	return res
+}
+
+// scanCipherSuites lists every suite Go implements, including those it
+// excludes by default, so legacy Targets can still be inspected (ADR-0002).
+// Only the scanning handshake uses it.
+func scanCipherSuites() []uint16 {
+	var ids []uint16
+	for _, s := range tls.CipherSuites() {
+		ids = append(ids, s.ID)
+	}
+	for _, s := range tls.InsecureCipherSuites() {
+		ids = append(ids, s.ID)
+	}
+	return ids
+}
+
+// weakCipher reports suites Go lists as insecure, plus RSA key exchange, which has no forward secrecy.
+func weakCipher(id uint16) bool {
+	for _, s := range tls.InsecureCipherSuites() {
+		if s.ID == id {
+			return true
+		}
+	}
+	return strings.HasPrefix(tls.CipherSuiteName(id), "TLS_RSA_")
 }
 
 func describe(c *x509.Certificate, now time.Time) Certificate {

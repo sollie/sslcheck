@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -18,9 +19,19 @@ import (
 
 // Cert is a generated certificate together with its private key.
 type Cert struct {
-	DER  []byte
-	Key  *ecdsa.PrivateKey
-	Leaf *x509.Certificate
+	DER []byte
+	Key *ecdsa.PrivateKey
+	// RSAKey is set instead of Key for certificates made with CertOpts.RSAKey.
+	RSAKey *rsa.PrivateKey
+	Leaf   *x509.Certificate
+}
+
+// Signer returns the private key a TLS server presents this certificate with.
+func (c *Cert) Signer() any {
+	if c.RSAKey != nil {
+		return c.RSAKey
+	}
+	return c.Key
 }
 
 // PEM returns the certificate PEM-encoded.
@@ -31,6 +42,8 @@ func (c *Cert) PEM() []byte {
 // CertOpts customises a generated certificate. Zero times give a certificate
 // valid from an hour ago until 24 hours from now.
 type CertOpts struct {
+	// RSAKey gives the certificate an RSA key, needed for RSA key-exchange suites.
+	RSAKey     bool
 	CommonName string
 	DNSNames   []string
 	IPs        []net.IP
@@ -72,6 +85,14 @@ func build(t testing.TB, o CertOpts, isCA bool, parent *Cert) Cert {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var rsaKey *rsa.PrivateKey
+	var pub any = &key.PublicKey
+	if o.RSAKey {
+		if rsaKey, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
+			t.Fatal(err)
+		}
+		pub = &rsaKey.PublicKey
+	}
 	if o.NotBefore.IsZero() {
 		o.NotBefore = time.Now().Add(-time.Hour)
 	}
@@ -94,6 +115,9 @@ func build(t testing.TB, o CertOpts, isCA bool, parent *Cert) Cert {
 		tmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
 	} else {
 		tmpl.KeyUsage = x509.KeyUsageDigitalSignature
+		if o.RSAKey {
+			tmpl.KeyUsage |= x509.KeyUsageKeyEncipherment
+		}
 		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 		if o.ExtKeyUsage != nil {
 			tmpl.ExtKeyUsage = o.ExtKeyUsage
@@ -103,7 +127,7 @@ func build(t testing.TB, o CertOpts, isCA bool, parent *Cert) Cert {
 	if parent != nil {
 		signer, signerKey = parent.Leaf, parent.Key
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, signer, &key.PublicKey, signerKey)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, signer, pub, signerKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,13 +145,16 @@ func build(t testing.TB, o CertOpts, isCA bool, parent *Cert) Cert {
 			Id:    asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 4, 2},
 			Value: SCTListExtension(t, scts...),
 		})
-		if der, err = x509.CreateCertificate(rand.Reader, tmpl, signer, &key.PublicKey, signerKey); err != nil {
+		if der, err = x509.CreateCertificate(rand.Reader, tmpl, signer, pub, signerKey); err != nil {
 			t.Fatal(err)
 		}
 	}
 	leaf, err := x509.ParseCertificate(der)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if rsaKey != nil {
+		return Cert{DER: der, RSAKey: rsaKey, Leaf: leaf}
 	}
 	return Cert{DER: der, Key: key, Leaf: leaf}
 }

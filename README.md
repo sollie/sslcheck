@@ -70,7 +70,7 @@ If both apply, `2` wins.
 
 ### Output formats
 
-`pretty` is human-readable: for each target the TLS version, every certificate
+`pretty` is human-readable: for each target the TLS version, the negotiated cipher suite, every certificate
 in the presented chain (subject, SANs, issuer, serial, validity, days
 remaining, signature, key, SHA-256, revocation), the Certificate Transparency
 SCTs and one verdict per trust store with its path, anchor and findings.
@@ -80,6 +80,12 @@ top-level `schema_version` (currently `1`) and a `results` list, one entry per
 target. Each result includes a `verdicts` list with one entry per trust store
 (`store`, `store_info`, `pass`, `unavailable`, `reasons`, `path`, `anchor`,
 `hostname_match` and `findings` with `severity` and `message`).
+
+Each result also carries the negotiated `cipher_suite`. The scan handshake
+offers every cipher suite Go implements, including those it disables by
+default (RSA key exchange, 3DES), so legacy servers can be inspected; no other
+connection the program makes does. A suite that is insecure or lacks forward
+secrecy (RSA key exchange) adds a warning finding to each available verdict.
 
 Colour is used only on a terminal. It is disabled by `--no-color` or
 `NO_COLOR`, and forced by `CLICOLOR_FORCE` (any value but `0`).
