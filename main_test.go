@@ -120,3 +120,46 @@ func TestUsageErrorsExitOne(t *testing.T) {
 		})
 	}
 }
+
+func TestMultipleTargetsPrintInInputOrderWithFailureReported(t *testing.T) {
+	var addrs []string
+	for _, cn := range []string{"one.test", "two.test", "three.test", "four.test"} {
+		addrs = append(addrs, testutil.StartTLS(t, testutil.SelfSigned(t, testutil.CertOpts{CommonName: cn})).Addr)
+	}
+	dead := testutil.StartTLS(t, testutil.SelfSigned(t, testutil.CertOpts{CommonName: "dead"}))
+	deadAddr := dead.Addr
+	dead.Close()
+	args := []string{"--no-color", "--timeout", "2s", "--concurrency", "2", addrs[0], deadAddr, addrs[1], addrs[2], addrs[3]}
+
+	code, out, _ := runCLI(t, nil, args...)
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	last := -1
+	for _, m := range []string{"one.test", deadAddr, "two.test", "three.test", "four.test"} {
+		i := strings.Index(out, m)
+		if i <= last {
+			t.Fatalf("%q out of order or missing:\n%s", m, out)
+		}
+		last = i
+	}
+	if !strings.Contains(out, "Error") {
+		t.Errorf("failure not reported:\n%s", out)
+	}
+}
+
+func TestConcurrencyMustBePositive(t *testing.T) {
+	if code, _, errs := runCLI(t, nil, "--concurrency", "0", "example.com"); code != 1 || errs == "" {
+		t.Errorf("exit %d, stderr %q; want 1 with message", code, errs)
+	}
+}
+
+func TestIPFamilySelection(t *testing.T) {
+	srv := testutil.StartTLS(t, testutil.SelfSigned(t, testutil.CertOpts{CommonName: "fam.test"}))
+	if code, _, errs := runCLI(t, nil, "--no-color", "-4", srv.Addr); code != 0 {
+		t.Errorf("-4: exit %d, stderr %s", code, errs)
+	}
+	if code, _, _ := runCLI(t, nil, "--no-color", "--timeout", "2s", "-6", srv.Addr); code != 1 {
+		t.Errorf("-6 against IPv4 server: exit %d, want 1", code)
+	}
+}
