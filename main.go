@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,8 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		startTLS = fs.String("starttls", "", "upgrade with STARTTLS before the handshake: smtp, imap, pop3 or none (default: inferred from port)")
 		conc     = fs.Int("concurrency", 8, "maximum number of Targets scanned in parallel")
 		noColor  = fs.Bool("no-color", false, "disable colour output")
+		format   = fs.StringP("format", "f", "pretty", "output format: pretty, json, yaml or toml")
+		withPEM  = fs.Bool("pem", false, "include each certificate as PEM")
 	)
 	if err := fs.Parse(args); err != nil {
 		if err == pflag.ErrHelp {
@@ -69,6 +72,10 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		return 1
 	}
 	opts := scan.Options{Timeout: *timeout, SNI: *sni, Network: "tcp", StartTLS: *startTLS}
+	if !slices.Contains(render.Formats, *format) {
+		_, _ = fmt.Fprintf(stderr, "sslcheck: unknown format %q (want %s)\n", *format, strings.Join(render.Formats, ", "))
+		return 1
+	}
 	if *ipv4 {
 		opts.Network = "tcp4"
 	}
@@ -93,7 +100,12 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 			code = 1
 		}
 	}
-	render.Pretty(stdout, results, useColor(stdout, env, *noColor))
+	if *format == "pretty" {
+		render.PrettyPEM(stdout, results, useColor(stdout, env, *noColor), *withPEM)
+	} else if err := render.Structured(stdout, render.NewReport(results, *withPEM), *format); err != nil {
+		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
+		return 1
+	}
 	return code
 }
 
@@ -120,6 +132,9 @@ func useColor(w io.Writer, env map[string]string, noColor bool) bool {
 	}
 	if _, set := env["NO_COLOR"]; set {
 		return false
+	}
+	if v := env["CLICOLOR_FORCE"]; v != "" && v != "0" {
+		return true
 	}
 	f, ok := w.(*os.File)
 	return ok && (isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd()))

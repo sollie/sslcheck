@@ -38,6 +38,11 @@ func newPalette(useColor bool) palette {
 
 // Pretty writes a report for each result in the given order.
 func Pretty(w io.Writer, results []scan.Result, useColor bool) {
+	PrettyPEM(w, results, useColor, false)
+}
+
+// PrettyPEM is Pretty, optionally followed by a PEM block per certificate.
+func PrettyPEM(w io.Writer, results []scan.Result, useColor, withPEM bool) {
 	p := newPalette(useColor)
 	for i, r := range results {
 		if i > 0 {
@@ -66,6 +71,9 @@ func Pretty(w io.Writer, results []scan.Result, useColor bool) {
 			field("Signature", c.SigAlgorithm)
 			field("Key", fmt.Sprintf("%s %d bits", c.KeyType, c.KeyBits))
 			field("SHA-256", c.SHA256)
+			if withPEM {
+				_, _ = fmt.Fprintf(w, "\n%s", c.PEM)
+			}
 		}
 	}
 }
