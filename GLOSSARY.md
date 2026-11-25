@@ -21,7 +21,7 @@ The result of verifying a Presented chain against one Trust store. A Target gets
 _Avoid_: Validation result, status
 
 **Scan**:
-One run against a Target. It always completes and reports, even when the chain is expired, self-signed or untrusted.
+One run against a Target. It always completes and reports, even when the chain is expired, self-signed or untrusted. Its outcome is either an error (no Presented chain was obtained) or one Verdict per Trust store.
 _Avoid_: Check, probe
 
 **Revocation status**:

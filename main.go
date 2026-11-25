@@ -8,7 +8,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mattn/go-isatty"
@@ -17,7 +16,6 @@ import (
 	"github.com/sollie/sslcheck/internal/scan"
 	"github.com/sollie/sslcheck/internal/starttls"
 	"github.com/sollie/sslcheck/internal/truststore"
-	"github.com/sollie/sslcheck/internal/verify"
 	"github.com/spf13/pflag"
 )
 
@@ -124,23 +122,16 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		return 1
 	}
 
-	results := scanAll(context.Background(), targets, opts, *conc)
+	opts.Stores = stores
+	opts.Concurrency = *conc
+	results := scan.ScanAll(context.Background(), targets, opts)
 	code := 0
 	verdictFailed := false
-	for i := range results {
-		r := &results[i]
+	for _, r := range results {
 		if r.Err != nil {
 			code = 1
-		} else {
-			r.Verdicts = verify.Verify(r.Certs, r.Target.SNI, stores, time.Now())
-			verify.ApplyRevocation(r.Verdicts, r.Revocation)
-			if r.CT != nil {
-				verify.ApplyCT(r.Verdicts, *r.CT)
-			}
-			for _, v := range r.Verdicts {
-				verdictFailed = verdictFailed || (!v.Pass && !v.Unavailable)
-			}
 		}
+		verdictFailed = verdictFailed || r.Failed()
 	}
 	if *format == "pretty" {
 		render.PrettyPEM(stdout, results, useColor(stdout, env, *noColor), *withPEM)
@@ -179,23 +170,6 @@ func updateData(stdout, stderr io.Writer, env map[string]string) int {
 			list.Logs, list.Date.UTC().Format(time.DateOnly), list.Path)
 	}
 	return 0
-}
-
-// scanAll scans targets with at most limit in flight; results keep input order.
-func scanAll(ctx context.Context, targets []scan.Target, opts scan.Options, limit int) []scan.Result {
-	results := make([]scan.Result, len(targets))
-	sem := make(chan struct{}, limit)
-	var wg sync.WaitGroup
-	for i, t := range targets {
-		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer func() { <-sem; wg.Done() }()
-			results[i] = scan.Scan(ctx, t, opts)
-		}()
-	}
-	wg.Wait()
-	return results
 }
 
 func useColor(w io.Writer, env map[string]string, noColor bool) bool {
