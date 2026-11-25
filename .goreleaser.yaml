@@ -38,6 +38,23 @@ archives:
 checksum:
   name_template: checksums.txt
 
+brews:
+  - name: sslcheck
+    ids: [sslcheck]
+    directory: Formula
+    homepage: https://github.com/sollie/sslcheck
+    description: Inspect TLS certificate chains and verify them against trust stores
+    skip_upload: auto
+    repository:
+      owner: sollie
+      name: homebrew-tap
+      token: "{{ .Env.TAP_TOKEN }}"
+    commit_author:
+      name: sslcheck release
+      email: noreply@github.com
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/sslcheck --version")
+
 changelog:
   disable: true
 

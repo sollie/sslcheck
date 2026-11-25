@@ -35,3 +35,5 @@ jobs:
           args: release --clean --release-notes RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT with contents:write on sollie/homebrew-tap only.
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
