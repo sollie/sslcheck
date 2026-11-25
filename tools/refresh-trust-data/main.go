@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 
 	"github.com/sollie/sslcheck/internal/ct"
+	"github.com/sollie/sslcheck/internal/refresh"
 	"github.com/sollie/sslcheck/internal/truststore"
 )
 
@@ -40,7 +41,7 @@ func run() error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(stage) }()
-	env := map[string]string{truststore.EnvCacheDir: stage}
+	env := map[string]string{refresh.EnvCacheDir: stage}
 	for _, k := range []string{truststore.EnvBundleURL, ct.EnvLogListURL} {
 		if v := os.Getenv(k); v != "" {
 			env[k] = v
@@ -48,8 +49,8 @@ func run() error {
 	}
 	ctx := context.Background()
 
-	switch res, err := truststore.Update(ctx, env, nil); {
-	case errors.Is(err, truststore.ErrNotNewer):
+	switch res, err := truststore.Update(ctx, env, truststore.HTTPClient()); {
+	case errors.Is(err, refresh.ErrNotNewer):
 		fmt.Println("trust store: already up to date")
 	case err != nil:
 		return fmt.Errorf("trust store: %w", err)
@@ -57,11 +58,11 @@ func run() error {
 		if err := install(res.Path, bundleDest); err != nil {
 			return err
 		}
-		fmt.Printf("trust store: updated to %s (%d certificates)\n", res.Date.UTC().Format("2006-01-02"), res.Certificates)
+		fmt.Printf("trust store: updated to %s (%d certificates)\n", res.Date.UTC().Format("2006-01-02"), res.Count)
 	}
 
-	switch res, err := ct.Update(ctx, env, nil); {
-	case errors.Is(err, ct.ErrNotNewer):
+	switch res, err := ct.Update(ctx, env, truststore.HTTPClient()); {
+	case errors.Is(err, refresh.ErrNotNewer):
 		fmt.Println("CT log list: already up to date")
 	case err != nil:
 		return fmt.Errorf("CT log list: %w", err)
@@ -69,7 +70,7 @@ func run() error {
 		if err := install(res.Path, logListDest); err != nil {
 			return err
 		}
-		fmt.Printf("CT log list: updated to %s (%d logs)\n", res.Date.UTC().Format("2006-01-02"), res.Logs)
+		fmt.Printf("CT log list: updated to %s (%d logs)\n", res.Date.UTC().Format("2006-01-02"), res.Count)
 	}
 	return nil
 }
@@ -79,5 +80,5 @@ func install(from, to string) error {
 	if err != nil {
 		return err
 	}
-	return truststore.WriteFileAtomic(to, data)
+	return refresh.WriteFileAtomic(to, data)
 }

@@ -7,8 +7,9 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
+
+	"github.com/sollie/sslcheck/internal/refresh"
 )
 
 // EnvSystemOverride names an environment variable that replaces the system
@@ -48,13 +49,12 @@ func Mozilla(env map[string]string) (Store, error) {
 	if err != nil {
 		return Store{}, err
 	}
-	if dir, err := CacheDir(env); err == nil {
-		path := filepath.Join(dir, BundleFile)
-		if data, err := os.ReadFile(path); err == nil { //nolint:gosec // path is under the cache dir
-			if b, err := parseBundle(data); err == nil && b.date.After(emb.Date) {
-				return Store{Name: "Mozilla", Roots: b.pool, Source: "cache " + path, Date: b.date}, nil
-			}
-		}
+	parse := func(data []byte) (bundle, time.Time, error) {
+		b, err := parseBundle(data)
+		return b, b.date, err
+	}
+	if b, path, ok := refresh.Cached(env, BundleFile, emb.Date, parse); ok {
+		return Store{Name: "Mozilla", Roots: b.pool, Source: "cache " + path, Date: b.date}, nil
 	}
 	return emb, nil
 }
