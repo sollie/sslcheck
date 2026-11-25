@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sollie/sslcheck/internal/starttls"
 )
 
 // Target is a host, port and optional SNI name to scan.
@@ -73,30 +75,33 @@ type Options struct {
 	Network string
 	// SNI overrides the server name; defaults to the Target host.
 	SNI string
+	// StartTLS is "smtp", "imap" or "pop3" to upgrade in-band before the
+	// handshake, "none" to force implicit TLS, or "" to infer from the port.
+	StartTLS string
 }
 
 // Certificate describes one certificate of the Presented chain.
 type Certificate struct {
-	Subject       string
-	SANs          []string
-	Issuer        string
-	Serial        string
-	NotBefore     time.Time
-	NotAfter      time.Time
-	DaysRemaining int
-	SigAlgorithm  string
-	KeyType       string
-	KeyBits       int
-	SHA256        string
-	PEM           string
+	Subject       string    `json:"subject"`
+	SANs          []string  `json:"sans"`
+	Issuer        string    `json:"issuer"`
+	Serial        string    `json:"serial"`
+	NotBefore     time.Time `json:"not_before"`
+	NotAfter      time.Time `json:"not_after"`
+	DaysRemaining int       `json:"days_remaining"`
+	SigAlgorithm  string    `json:"signature_algorithm"`
+	KeyType       string    `json:"key_type"`
+	KeyBits       int       `json:"key_bits"`
+	SHA256        string    `json:"sha256_fingerprint"`
+	PEM           string    `json:"pem"`
 }
 
 // Result is the outcome of scanning one Target.
 type Result struct {
-	Target     Target
-	TLSVersion string
-	Chain      []Certificate
-	Err        error
+	Target     Target        `json:"target"`
+	TLSVersion string        `json:"tls_version"`
+	Chain      []Certificate `json:"chain"`
+	Err        error         `json:"-"`
 }
 
 // Scan connects to t, completes the handshake without verifying it and
@@ -127,15 +132,43 @@ func Scan(ctx context.Context, t Target, opts Options) Result {
 	if net.ParseIP(sni) == nil {
 		cfg.ServerName = sni
 	}
-	dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
-	conn, err := dialer.DialContext(ctx, network, t.Address())
-	if err != nil {
-		res.Err = err
-		return res
+	proto := opts.StartTLS
+	if proto == "" {
+		proto = starttls.Infer(t.Port)
 	}
-	defer func() { _ = conn.Close() }()
+	var tlsConn *tls.Conn
+	if proto == "" || proto == starttls.None {
+		dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
+		conn, err := dialer.DialContext(ctx, network, t.Address())
+		if err != nil {
+			res.Err = err
+			return res
+		}
+		tlsConn = conn.(*tls.Conn)
+	} else {
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, t.Address())
+		if err != nil {
+			res.Err = fmt.Errorf("STARTTLS %s: %w", proto, err)
+			return res
+		}
+		if dl, ok := ctx.Deadline(); ok {
+			_ = conn.SetDeadline(dl)
+		}
+		if err := starttls.Upgrade(conn, proto); err != nil {
+			_ = conn.Close()
+			res.Err = err
+			return res
+		}
+		tlsConn = tls.Client(conn, cfg)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			res.Err = err
+			return res
+		}
+	}
+	defer func() { _ = tlsConn.Close() }()
 
-	state := conn.(*tls.Conn).ConnectionState()
+	state := tlsConn.ConnectionState()
 	res.TLSVersion = tls.VersionName(state.Version)
 	for _, c := range state.PeerCertificates {
 		res.Chain = append(res.Chain, describe(c, time.Now()))
