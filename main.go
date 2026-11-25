@@ -12,6 +12,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/sollie/sslcheck/internal/render"
 	"github.com/sollie/sslcheck/internal/scan"
+	"github.com/sollie/sslcheck/internal/starttls"
 	"github.com/spf13/pflag"
 )
 
@@ -35,12 +36,13 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		fs.PrintDefaults()
 	}
 	var (
-		sni     = fs.String("sni", "", "server name to send, overriding the Target host")
-		timeout = fs.Duration("timeout", 5*time.Second, "timeout for connect and handshake")
-		ipv4    = fs.BoolP("ipv4", "4", false, "connect over IPv4 only")
-		ipv6    = fs.BoolP("ipv6", "6", false, "connect over IPv6 only")
-		conc    = fs.Int("concurrency", 8, "maximum number of Targets scanned in parallel")
-		noColor = fs.Bool("no-color", false, "disable colour output")
+		sni      = fs.String("sni", "", "server name to send, overriding the Target host")
+		timeout  = fs.Duration("timeout", 5*time.Second, "timeout for connect and handshake")
+		ipv4     = fs.BoolP("ipv4", "4", false, "connect over IPv4 only")
+		ipv6     = fs.BoolP("ipv6", "6", false, "connect over IPv6 only")
+		startTLS = fs.String("starttls", "", "upgrade with STARTTLS before the handshake: smtp, imap, pop3 or none (default: inferred from port)")
+		conc     = fs.Int("concurrency", 8, "maximum number of Targets scanned in parallel")
+		noColor  = fs.Bool("no-color", false, "disable colour output")
 	)
 	if err := fs.Parse(args); err != nil {
 		if err == pflag.ErrHelp {
@@ -62,7 +64,11 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		_, _ = fmt.Fprintln(stderr, "sslcheck: --concurrency must be at least 1")
 		return 1
 	}
-	opts := scan.Options{Timeout: *timeout, SNI: *sni, Network: "tcp"}
+	if !starttls.Valid(*startTLS) {
+		_, _ = fmt.Fprintf(stderr, "sslcheck: unsupported --starttls protocol %q (want smtp, imap, pop3 or none)\n", *startTLS)
+		return 1
+	}
+	opts := scan.Options{Timeout: *timeout, SNI: *sni, Network: "tcp", StartTLS: *startTLS}
 	if *ipv4 {
 		opts.Network = "tcp4"
 	}
