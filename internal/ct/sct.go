@@ -113,7 +113,7 @@ func Verify(list LogList, chain []*x509.Certificate, roots []*x509.CertPool, tls
 		}
 		inRange := r.timestamp <= maxTimestampMillis
 		if inRange {
-			s.Timestamp = time.UnixMilli(int64(r.timestamp)).UTC() //nolint:gosec // bounded by maxTimestampMillis
+			s.Timestamp = time.UnixMilli(int64(r.timestamp)).UTC()
 		}
 		if !inRange {
 			s.Detail = "SCT timestamp is out of range"

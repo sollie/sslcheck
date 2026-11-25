@@ -171,7 +171,7 @@ func Download(ctx context.Context, client *http.Client, url string) ([]byte, err
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", url, err)
 	}
-	resp, err := client.Do(req) //nolint:gosec // URL is operator-configurable by design
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", url, err)
 	}

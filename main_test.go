@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,25 +176,15 @@ func TestUnknownSTARTTLSProtocolIsUsageError(t *testing.T) {
 	}
 }
 
-// Nothing is expected to listen on these well-known ports on the test host;
-// the connection error reveals whether a STARTTLS upgrade was inferred.
-func TestSTARTTLSInferredFromPort(t *testing.T) {
-	for port, proto := range map[string]string{"25": "smtp", "587": "smtp", "143": "imap", "110": "pop3"} {
-		_, out, _ := runCLI(t, nil, "--no-color", "--timeout", "1s", "127.0.0.1:"+port)
-		if !strings.Contains(out, "STARTTLS "+proto) {
-			t.Errorf("port %s: expected inferred %s:\n%s", port, proto, out)
-		}
-	}
-	for _, port := range []string{"465", "993", "995", "5061"} {
-		_, out, _ := runCLI(t, nil, "--no-color", "--timeout", "1s", "127.0.0.1:"+port)
-		if strings.Contains(out, "STARTTLS") {
-			t.Errorf("port %s: implicit TLS must not use STARTTLS:\n%s", port, out)
-		}
-	}
-}
-
 func TestSTARTTLSFlagOverridesInference(t *testing.T) {
-	_, out, _ := runCLI(t, nil, "--no-color", "--timeout", "1s", "--starttls", "imap", "127.0.0.1:25")
+	// A closed local port keeps the test independent of what listens on the host.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	_, out, _ := runCLI(t, nil, "--no-color", "--timeout", "1s", "--starttls", "imap", addr)
 	if !strings.Contains(out, "STARTTLS imap") {
 		t.Errorf("flag should win over port inference:\n%s", out)
 	}

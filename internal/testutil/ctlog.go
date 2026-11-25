@@ -92,7 +92,7 @@ func (l *CTLog) SignX509AtMillis(t testing.TB, c *Cert, millis uint64) []byte {
 }
 
 func minuteAgo() uint64 {
-	return uint64(time.Now().Add(-time.Minute).UnixMilli()) //nolint:gosec // test timestamps are positive
+	return uint64(time.Now().Add(-time.Minute).UnixMilli())
 }
 
 func (l *CTLog) signPrecert(t testing.TB, issuerSPKI, tbs []byte) []byte {
