@@ -43,18 +43,20 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		fs.PrintDefaults()
 	}
 	var (
-		sni      = fs.String("sni", "", "server name to send, overriding the Target host")
-		timeout  = fs.Duration("timeout", 5*time.Second, "timeout for connect and handshake")
-		ipv4     = fs.BoolP("ipv4", "4", false, "connect over IPv4 only")
-		ipv6     = fs.BoolP("ipv6", "6", false, "connect over IPv6 only")
-		startTLS = fs.String("starttls", "", "upgrade with STARTTLS before the handshake: smtp, imap, pop3 or none (default: inferred from port)")
-		conc     = fs.Int("concurrency", 8, "maximum number of Targets scanned in parallel")
-		noColor  = fs.Bool("no-color", false, "disable colour output")
-		format   = fs.StringP("format", "f", "pretty", "output format: pretty, json, yaml or toml")
-		withPEM  = fs.Bool("pem", false, "include each certificate as PEM")
-		revoc    = fs.Bool("revocation", false, "also query live OCSP (CRL when no OCSP URL) for every certificate except the root")
-		strict   = fs.Bool("strict", false, "exit 2 when any Trust store Verdict fails")
-		showVer  = fs.Bool("version", false, "print version and exit")
+		sni       = fs.String("sni", "", "server name to send, overriding the Target host")
+		timeout   = fs.Duration("timeout", 5*time.Second, "timeout for connect and handshake")
+		ipv4      = fs.BoolP("ipv4", "4", false, "connect over IPv4 only")
+		ipv6      = fs.BoolP("ipv6", "6", false, "connect over IPv6 only")
+		startTLS  = fs.String("starttls", "", "upgrade with STARTTLS before the handshake: smtp, imap, pop3 or none (default: inferred from port)")
+		conc      = fs.Int("concurrency", 8, "maximum number of Targets scanned in parallel")
+		noColor   = fs.Bool("no-color", false, "disable colour output")
+		format    = fs.StringP("format", "f", "pretty", "output format: pretty, json, yaml or toml")
+		withPEM   = fs.Bool("pem", false, "include each certificate as PEM")
+		revoc     = fs.Bool("revocation", false, "also query live OCSP (CRL when no OCSP URL) for every certificate except the root")
+		strict    = fs.Bool("strict", false, "exit 2 when any Trust store Verdict fails")
+		trustFile = fs.String("trust-store", "", "PEM file of root certificates to verify against, overriding the Mozilla and system stores")
+		update    = fs.Bool("update-trust-store", false, "download the latest Mozilla bundle into the cache directory and exit")
+		showVer   = fs.Bool("version", false, "print version and exit")
 	)
 	if err := fs.Parse(args); err != nil {
 		if err == pflag.ErrHelp {
@@ -66,6 +68,9 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 	if *showVer {
 		_, _ = fmt.Fprintf(stdout, "sslcheck %s\n", version)
 		return 0
+	}
+	if *update {
+		return updateData(stdout, stderr, env)
 	}
 	if fs.NArg() == 0 {
 		_, _ = fmt.Fprintln(stderr, "sslcheck: no target given")
@@ -106,7 +111,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		targets = append(targets, t)
 	}
 
-	stores, err := truststore.Default(env)
+	stores, err := truststore.Default(env, *trustFile)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
 		return 1
@@ -137,6 +142,18 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		return 2
 	}
 	return code
+}
+
+// updateData implements --update-trust-store.
+func updateData(stdout, stderr io.Writer, env map[string]string) int {
+	res, err := truststore.Update(context.Background(), env, nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "sslcheck: update trust store: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintf(stdout, "Trust store updated: %d certificates, dated %s, stored in %s\n",
+		res.Certificates, res.Date.UTC().Format(time.DateOnly), res.Path)
+	return 0
 }
 
 // scanAll scans targets with at most limit in flight; results keep input order.

@@ -23,6 +23,9 @@ func writeVerdicts(w io.Writer, p palette, verdicts []verify.Verdict) {
 			match = "yes"
 		}
 		_, _ = fmt.Fprintf(w, "  %s %s  hostname match: %s (%s)\n", p.label.Sprintf("%-8s", v.Store+":"), status, match, v.Name)
+		if v.StoreInfo != "" {
+			_, _ = fmt.Fprintf(w, "    trust store: %s\n", v.StoreInfo)
+		}
 		if len(v.Path) > 0 {
 			_, _ = fmt.Fprintf(w, "    path:   %s\n", strings.Join(v.Path, " -> "))
 			_, _ = fmt.Fprintf(w, "    anchor: %s\n", v.Anchor)

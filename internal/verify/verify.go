@@ -43,7 +43,9 @@ type Finding struct {
 // Verdict is the result of verifying a Presented chain against one Trust store.
 type Verdict struct {
 	Store string
-	Pass  bool
+	// StoreInfo is the source and date of the Trust store.
+	StoreInfo string
+	Pass      bool
 	// Reasons lists the failure reasons; empty when Pass.
 	Reasons []string
 	// Path is the verified path as subject strings, leaf first, ending at the anchor.
@@ -66,7 +68,7 @@ func Verify(chain []*x509.Certificate, name string, stores []truststore.Store, n
 }
 
 func verifyOne(chain []*x509.Certificate, name string, store truststore.Store, now time.Time) Verdict {
-	v := Verdict{Store: store.Name, Name: name}
+	v := Verdict{Store: store.Name, StoreInfo: store.Description(), Name: name}
 	if len(chain) == 0 {
 		v.Reasons = []string{ReasonUnknownAuthority}
 		v.Findings = []Finding{{Failure, "no certificates presented"}}
