@@ -52,7 +52,7 @@ func Revocation(allowPrivate bool, fallback func() *x509.CertPool) Policy {
 // as an internal mirror, are allowed. SSL_CERT_FILE in env adds trusted roots.
 func Update(env map[string]string, fallback func() *x509.CertPool) Policy {
 	return Policy{
-		MaxRedirects:  10,
+		MaxRedirects:  9,
 		Timeout:       30 * time.Second,
 		EnvProxy:      true,
 		FallbackRoots: fallback,
