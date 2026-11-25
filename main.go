@@ -14,6 +14,9 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// version is set at release time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	env := map[string]string{}
 	for _, kv := range os.Environ() {
@@ -39,6 +42,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		ipv4    = fs.BoolP("ipv4", "4", false, "connect over IPv4 only")
 		ipv6    = fs.BoolP("ipv6", "6", false, "connect over IPv6 only")
 		noColor = fs.Bool("no-color", false, "disable colour output")
+		showVer = fs.Bool("version", false, "print version and exit")
 	)
 	if err := fs.Parse(args); err != nil {
 		if err == pflag.ErrHelp {
@@ -46,6 +50,10 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		}
 		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
 		return 1
+	}
+	if *showVer {
+		_, _ = fmt.Fprintf(stdout, "sslcheck %s\n", version)
+		return 0
 	}
 	if fs.NArg() == 0 {
 		_, _ = fmt.Fprintln(stderr, "sslcheck: no target given")
