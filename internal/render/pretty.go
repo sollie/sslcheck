@@ -12,9 +12,6 @@ import (
 	"github.com/sollie/sslcheck/internal/scan"
 )
 
-// expiryWarnDays is the threshold below which a certificate gets a warning.
-const expiryWarnDays = 30
-
 type palette struct {
 	heading, target, label, value, dim, ok, warn, bad *color.Color
 }
@@ -89,7 +86,7 @@ func PrettyPEM(w io.Writer, results []scan.Result, level ColorLevel, withPEM boo
 			field("Serial", p.dim.Sprint(c.Serial))
 			field("Not Before", c.NotBefore.UTC().Format("2006-01-02 15:04:05 MST"))
 			field("Not After", c.NotAfter.UTC().Format("2006-01-02 15:04:05 MST"))
-			field("Expiry", expiry(p, c.DaysRemaining))
+			field("Expiry", expiry(p, c))
 			field("Signature", c.SigAlgorithm)
 			field("Key", fmt.Sprintf("%s %d bits", c.KeyType, c.KeyBits))
 			field("SHA-256", p.dim.Sprint(c.SHA256))
@@ -114,11 +111,14 @@ func tlsVersion(p palette, v string) string {
 	return p.warn.Sprint(v)
 }
 
-func expiry(p palette, days int) string {
+func expiry(p palette, c scan.Certificate) string {
+	days := c.DaysRemaining
 	switch {
-	case days < 0:
+	case c.Expired && days >= 0:
+		return p.bad.Sprint("expired less than a day ago")
+	case c.Expired:
 		return p.bad.Sprintf("expired %d days ago", -days)
-	case days < expiryWarnDays:
+	case c.ExpiresSoon:
 		return p.warn.Sprintf("%d days remaining (warning)", days)
 	}
 	return p.ok.Sprintf("%d days remaining", days)
