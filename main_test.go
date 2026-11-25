@@ -164,6 +164,8 @@ func TestIPFamilySelection(t *testing.T) {
 	}
 	if code, _, _ := runCLI(t, nil, "--no-color", "--timeout", "2s", "-6", srv.Addr); code != 1 {
 		t.Errorf("-6 against IPv4 server: exit %d, want 1", code)
+	}
+}
 
 func TestScanReportsCertificateDetailsAndTLSVersion(t *testing.T) {
 	root := testutil.NewCA(t, "Detail Root")
