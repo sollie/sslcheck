@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	newerDateLine = "## Certificate data from Mozilla as of: Fri Dec  4 04:12:01 2026 GMT"
+	newerDateLine = "## Certificate data from Mozilla as of: Fri Dec  4 04:12:01 2099 GMT"
 	olderDateLine = "## Certificate data from Mozilla as of: Mon Jan  5 04:12:01 2026 GMT"
 )
 
@@ -95,7 +95,7 @@ func TestUpdateStoresNewerBundleAndCacheWinsOverEmbedded(t *testing.T) {
 	if !strings.Contains(moz, "pass") {
 		t.Errorf("cached bundle should be trusted:\n%s", out)
 	}
-	if !strings.Contains(out, "cache") || !strings.Contains(out, "2026-12-04") {
+	if !strings.Contains(out, "cache") || !strings.Contains(out, "2099-12-04") {
 		t.Errorf("report should name cache source and date:\n%s", out)
 	}
 }
