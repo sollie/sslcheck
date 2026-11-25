@@ -135,7 +135,7 @@ func run(args []string, stdout, stderr io.Writer, env map[string]string) int {
 		verdictFailed = verdictFailed || r.Failed()
 	}
 	if *format == "pretty" {
-		render.PrettyPEM(stdout, results, useColor(stdout, env, *noColor), *withPEM)
+		render.PrettyPEM(stdout, results, colorLevel(stdout, env, *noColor), *withPEM)
 	} else if err := render.Structured(stdout, render.NewReport(results, *withPEM), *format); err != nil {
 		_, _ = fmt.Fprintf(stderr, "sslcheck: %v\n", err)
 		return 1
@@ -173,16 +173,22 @@ func updateData(stdout, stderr io.Writer, env map[string]string) int {
 	return 0
 }
 
-func useColor(w io.Writer, env map[string]string, noColor bool) bool {
+func colorLevel(w io.Writer, env map[string]string, noColor bool) render.ColorLevel {
 	if noColor {
-		return false
+		return render.ColorNone
 	}
 	if _, set := env["NO_COLOR"]; set {
-		return false
+		return render.ColorNone
 	}
-	if v := env["CLICOLOR_FORCE"]; v != "" && v != "0" {
-		return true
+	forced := env["CLICOLOR_FORCE"] != "" && env["CLICOLOR_FORCE"] != "0"
+	if !forced {
+		f, ok := w.(*os.File)
+		if !ok || (!isatty.IsTerminal(f.Fd()) && !isatty.IsCygwinTerminal(f.Fd())) {
+			return render.ColorNone
+		}
 	}
-	f, ok := w.(*os.File)
-	return ok && (isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd()))
+	if ct := strings.ToLower(env["COLORTERM"]); ct == "truecolor" || ct == "24bit" {
+		return render.ColorTrue
+	}
+	return render.Color16
 }
