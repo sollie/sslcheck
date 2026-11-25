@@ -108,11 +108,14 @@ type Certificate struct {
 	NotBefore     time.Time
 	NotAfter      time.Time
 	DaysRemaining int
-	SigAlgorithm  string
-	KeyType       string
-	KeyBits       int
-	SHA256        string
-	PEM           string
+	// Expired and ExpiresSoon use exact timestamps; DaysRemaining is for display only.
+	Expired      bool
+	ExpiresSoon  bool
+	SigAlgorithm string
+	KeyType      string
+	KeyBits      int
+	SHA256       string
+	PEM          string
 	// Revocation holds the Revocation status results for this certificate.
 	Revocation []revocation.Result
 }
@@ -278,6 +281,8 @@ func describe(c *x509.Certificate, now time.Time) Certificate {
 		NotBefore:     c.NotBefore,
 		NotAfter:      c.NotAfter,
 		DaysRemaining: int(c.NotAfter.Sub(now).Hours() / 24),
+		Expired:       now.After(c.NotAfter),
+		ExpiresSoon:   verify.ExpiresSoon(c, now),
 		SigAlgorithm:  c.SignatureAlgorithm.String(),
 		KeyType:       kt,
 		KeyBits:       kb,

@@ -96,7 +96,25 @@ Each presented chain gets one verdict per trust store:
 A verdict checks the chain, expiry, and that the hostname matches the SNI name.
 Failures (expired, unknown authority, hostname mismatch, revoked) fail the
 verdict; warnings (leaf expires within 30 days, unknown revocation status,
-missing or invalid SCTs) do not.
+missing or invalid SCTs) do not. All problems found are reported, so an
+expired self-signed certificate lists both `expired` and `unknown authority`.
+A trust store with no roots is `unavailable`: never a pass, and it carries no
+findings.
+
+The `reasons` of a verdict are a stable set of values, safe to switch on:
+
+| Reason | Meaning |
+| --- | --- |
+| `expired` | A certificate in the chain has passed its end of validity. |
+| `not yet valid` | A certificate in the chain is not valid yet. |
+| `unknown authority` | The chain does not lead to a root in the trust store. |
+| `hostname mismatch` | The leaf does not match the checked name. |
+| `revoked` | A certificate was reported revoked. |
+| `verification failed` | Any other verification error; the detail is in the findings. |
+
+Free-text detail appears only in `findings`. Expiry uses exact timestamps: a
+certificate is warned about when 30 days or less remain, in both the
+certificate block and the verdict.
 
 ### STARTTLS
 

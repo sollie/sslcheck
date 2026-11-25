@@ -14,8 +14,13 @@ import (
 	"github.com/sollie/sslcheck/internal/truststore"
 )
 
-// ExpiryWarnDays is how close to expiry the leaf must be to raise a warning.
-const ExpiryWarnDays = 30
+// ExpiryWarning is how close to expiry a certificate must be to raise a warning.
+const ExpiryWarning = 30 * 24 * time.Hour
+
+// ExpiresSoon reports whether c is still valid at now but within ExpiryWarning of its end.
+func ExpiresSoon(c *x509.Certificate, now time.Time) bool {
+	return !now.After(c.NotAfter) && c.NotAfter.Sub(now) <= ExpiryWarning
+}
 
 // Reasons a Verdict can fail.
 const (
@@ -24,6 +29,8 @@ const (
 	ReasonUnknownAuthority = "unknown authority"
 	ReasonHostnameMismatch = "hostname mismatch"
 	ReasonRevoked          = "revoked"
+	// ReasonVerificationFailed covers any other verification error; the detail is in Findings.
+	ReasonVerificationFailed = "verification failed"
 )
 
 // Severity of a Finding.
@@ -98,24 +105,29 @@ func verifyOne(chain []*x509.Certificate, name string, store truststore.Store, n
 	paths, err := leaf.Verify(opts)
 	if err != nil {
 		var invalid x509.CertificateInvalidError
-		var unknown x509.UnknownAuthorityError
-		switch {
-		case errors.As(err, &invalid) && invalid.Reason == x509.Expired:
-			reason := ReasonExpired
-			if now.Before(leaf.NotBefore) {
-				reason = ReasonNotYetValid
+		if errors.As(err, &invalid) && invalid.Reason == x509.Expired {
+			reason, subject := ReasonExpired, leaf.Subject.String()
+			if invalid.Cert != nil {
+				subject = invalid.Cert.Subject.String()
+				if now.Before(invalid.Cert.NotBefore) {
+					reason = ReasonNotYetValid
+				}
 			}
-			v.Reasons = append(v.Reasons, reason)
-			v.Findings = append(v.Findings, Finding{Failure, fmt.Sprintf("%s: %s", reason, invalid.Detail)})
-			// Re-verify inside the leaf's validity to still report path and anchor.
-			opts.CurrentTime = leaf.NotBefore.Add(leaf.NotAfter.Sub(leaf.NotBefore) / 2)
-			paths, _ = leaf.Verify(opts)
-		case errors.As(err, &unknown):
-			v.Reasons = append(v.Reasons, ReasonUnknownAuthority)
-			v.Findings = append(v.Findings, Finding{Failure, "chain does not lead to a trusted root in the " + store.Name + " store"})
-		default:
-			v.Reasons = append(v.Reasons, err.Error())
-			v.Findings = append(v.Findings, Finding{Failure, err.Error()})
+			v.addFailure(reason, fmt.Sprintf("%s: %s (%s)", reason, invalid.Detail, subject))
+			// Re-verify inside the validity of the presented chain to report the remaining problems.
+			opts.CurrentTime = validityMidpoint(chain)
+			paths, err = leaf.Verify(opts)
+			if err != nil && errors.As(err, &invalid) && invalid.Reason == x509.Expired {
+				err = nil
+			}
+		}
+		if err != nil {
+			var unknown x509.UnknownAuthorityError
+			if errors.As(err, &unknown) {
+				v.addFailure(ReasonUnknownAuthority, "chain does not lead to a trusted root in the "+store.Name+" store")
+			} else {
+				v.addFailure(ReasonVerificationFailed, err.Error())
+			}
 		}
 	}
 	if len(paths) > 0 {
@@ -129,10 +141,39 @@ func verifyOne(chain []*x509.Certificate, name string, store truststore.Store, n
 		v.Findings = append(v.Findings, Finding{Failure, fmt.Sprintf("certificate does not match %q", name)})
 	}
 	v.Pass = len(v.Reasons) == 0
-	if days := int(leaf.NotAfter.Sub(now).Hours() / 24); !now.After(leaf.NotAfter) && days <= ExpiryWarnDays {
-		v.Findings = append(v.Findings, Finding{Warning, fmt.Sprintf("leaf certificate expires in %d days", days)})
+	if ExpiresSoon(leaf, now) {
+		msg := "leaf certificate expires in less than a day"
+		if days := int(leaf.NotAfter.Sub(now).Hours() / 24); days > 0 {
+			msg = fmt.Sprintf("leaf certificate expires in %d days", days)
+		}
+		v.Findings = append(v.Findings, Finding{Warning, msg})
 	}
 	return v
+}
+
+func (v *Verdict) addFailure(reason, detail string) {
+	if !slices.Contains(v.Reasons, reason) {
+		v.Reasons = append(v.Reasons, reason)
+	}
+	v.Findings = append(v.Findings, Finding{Failure, detail})
+}
+
+// validityMidpoint picks a time inside every certificate's validity window, or
+// the middle of the leaf's window when the chain has no common one.
+func validityMidpoint(chain []*x509.Certificate) time.Time {
+	from, to := chain[0].NotBefore, chain[0].NotAfter
+	for _, c := range chain[1:] {
+		if c.NotBefore.After(from) {
+			from = c.NotBefore
+		}
+		if c.NotAfter.Before(to) {
+			to = c.NotAfter
+		}
+	}
+	if !from.Before(to) {
+		from, to = chain[0].NotBefore, chain[0].NotAfter
+	}
+	return from.Add(to.Sub(from) / 2)
 }
 
 // ApplyCT adds a warning to every verdict when the SCTs found are missing,
@@ -151,6 +192,9 @@ func ApplyCT(verdicts []Verdict, res ct.Result) {
 		msgs = append(msgs, fmt.Sprintf("only %d valid SCT(s) from distinct logs, expected at least %d", res.Valid, ct.MinSCTs))
 	}
 	for i := range verdicts {
+		if verdicts[i].Unavailable {
+			continue
+		}
 		for _, m := range msgs {
 			verdicts[i].Findings = append(verdicts[i].Findings, Finding{Warning, m})
 		}
@@ -162,6 +206,9 @@ func ApplyCT(verdicts []Verdict, res ct.Result) {
 func ApplyRevocation(verdicts []Verdict, results []revocation.Result) {
 	for i := range verdicts {
 		v := &verdicts[i]
+		if v.Unavailable {
+			continue
+		}
 		for _, r := range results {
 			switch r.Status {
 			case revocation.Revoked:
