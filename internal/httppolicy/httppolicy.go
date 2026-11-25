@@ -108,7 +108,7 @@ func (p Policy) roots() *x509.CertPool {
 		pool, _ = x509.SystemCertPool()
 	}
 	if p.RootsFile != "" {
-		if pem, err := os.ReadFile(p.RootsFile); err == nil { //nolint:gosec // operator-supplied roots
+		if pem, err := os.ReadFile(p.RootsFile); err == nil {
 			if pool == nil {
 				pool = x509.NewCertPool()
 			}
