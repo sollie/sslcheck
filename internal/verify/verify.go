@@ -42,7 +42,7 @@ type Verdict struct {
 	Store string
 	// StoreInfo is the source and date of the Trust store.
 	StoreInfo string
-	Pass  bool
+	Pass      bool
 	// Reasons lists the failure reasons; empty when Pass.
 	Reasons []string
 	// Path is the verified path as subject strings, leaf first, ending at the anchor.
