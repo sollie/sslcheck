@@ -38,7 +38,7 @@ func embeddedBundleDate(t *testing.T) time.Time {
 		t.Fatal("checked-in bundle has no date line")
 	}
 	_, value, _ := strings.Cut(string(line), "as of: ")
-	d, err := time.Parse("Mon Jan _2 15:04:05 2006 MST", value)
+	d, err := time.Parse("Mon Jan _2 15:04:05 2006 MST", strings.TrimSpace(value))
 	if err != nil {
 		t.Fatal(err)
 	}
