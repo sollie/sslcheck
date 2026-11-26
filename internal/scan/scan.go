@@ -45,6 +45,11 @@ func (t Target) Address() string {
 	return net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
 }
 
+// IsIP reports whether the host is an IP literal, which is never resolved.
+func (t Target) IsIP() bool {
+	return net.ParseIP(t.Host) != nil
+}
+
 // dialAddress is the address to connect to: the pinned IP when set, else Address.
 func (t Target) dialAddress() string {
 	if t.IP == "" {
@@ -172,8 +177,11 @@ type Certificate struct {
 
 // Result is the outcome of scanning one Target.
 type Result struct {
-	Target     Target
-	TLSVersion string
+	Target Target
+	// TargetIndex is the position of the Target this Scan belongs to in the
+	// list given to ScanAll; address Scans of one Target share it.
+	TargetIndex int
+	TLSVersion  string
 	// CipherSuite is the negotiated cipher suite; WeakCipher is set when it is insecure or lacks forward secrecy.
 	CipherSuite string
 	WeakCipher  bool
@@ -219,8 +227,11 @@ func ScanAll(ctx context.Context, targets []Target, opts Options) []Result {
 	}
 	wg.Wait()
 	var results []Result
-	for _, g := range groups {
-		results = append(results, g...)
+	for i, g := range groups {
+		for _, r := range g {
+			r.TargetIndex = i
+			results = append(results, r)
+		}
 	}
 	return results
 }
@@ -245,7 +256,7 @@ func acquire(ctx context.Context, sem chan struct{}) bool {
 // scanTarget scans t once, or once per resolved address under opts.AllIPs. It
 // is entered holding one slot of sem and gives it back before returning.
 func scanTarget(ctx context.Context, t Target, opts Options, sem chan struct{}) []Result {
-	if !opts.AllIPs || net.ParseIP(t.Host) != nil {
+	if !opts.AllIPs || t.IsIP() {
 		defer func() { <-sem }()
 		return []Result{scanOne(ctx, t, opts)}
 	}

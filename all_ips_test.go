@@ -207,3 +207,24 @@ func TestPrettyListsErroredAddressGroupLast(t *testing.T) {
 		t.Errorf("want the errored group listed last:\n%s", out)
 	}
 }
+
+func TestAllIPsSendsTargetHostAsSNIByDefault(t *testing.T) {
+	port, _, _ := allIPsFixture(t)
+	_, out, _ := runCLI(t, nil, "-f", "json", "--all-ips", "localhost:"+port)
+	for _, r := range decode(t, "json", out).Results {
+		if r.SNI != "localhost" {
+			t.Errorf("SNI = %q for %s, want the Target host", r.SNI, r.Address)
+		}
+	}
+}
+
+func TestAllIPsStructuredFormatsCarryAddress(t *testing.T) {
+	port, _, _ := allIPsFixture(t)
+	for _, format := range []string{"json", "yaml", "toml"} {
+		_, out, _ := runCLI(t, nil, "-f", format, "--all-ips", "localhost:"+port)
+		rep := decode(t, format, out)
+		if len(rep.Results) < 2 || rep.Results[0].Address != "127.0.0.1" || rep.Results[len(rep.Results)-1].Address != "::1" {
+			t.Errorf("%s: want one result per address, v4 first:\n%s", format, out)
+		}
+	}
+}

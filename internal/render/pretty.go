@@ -4,7 +4,6 @@ package render
 import (
 	"fmt"
 	"io"
-	"net/netip"
 	"sort"
 	"strings"
 	"unicode"
@@ -145,22 +144,12 @@ func writeHeading(w io.Writer, p palette, t scan.Target) {
 // addressRun is how many leading results are address Scans of one Target
 // (under --all-ips); any other result counts as a run of one.
 func addressRun(results []scan.Result) int {
-	first := results[0].Target
-	if first.IP == "" {
+	first := results[0]
+	if first.Target.IP == "" {
 		return 1
 	}
 	n := 1
-	for n < len(results) {
-		t := results[n].Target
-		if t.IP == "" || t.Host != first.Host || t.Port != first.Port || t.SNI != first.SNI {
-			break
-		}
-		// Addresses ascend within a Target, so a repeat or step back starts the next one.
-		prev, err1 := netip.ParseAddr(results[n-1].Target.IP)
-		cur, err2 := netip.ParseAddr(t.IP)
-		if err1 != nil || err2 != nil || cur.Compare(prev) <= 0 {
-			break
-		}
+	for n < len(results) && results[n].Target.IP != "" && results[n].TargetIndex == first.TargetIndex {
 		n++
 	}
 	return n
@@ -168,25 +157,30 @@ func addressRun(results []scan.Result) int {
 
 // groupKey identifies what an address presented: the Presented chain, or the
 // error that stopped the Scan.
-func groupKey(r scan.Result) string {
+type groupKey struct {
+	err   string
+	chain string
+}
+
+func keyOf(r scan.Result) groupKey {
 	if r.Err != nil {
-		return "error:" + r.Err.Error()
+		return groupKey{err: r.Err.Error()}
 	}
 	var b strings.Builder
 	for _, c := range r.Chain {
 		b.WriteString(c.SHA256)
 		b.WriteByte(',')
 	}
-	return b.String()
+	return groupKey{chain: b.String()}
 }
 
 // writeAddressGroups prints the Scans of one Target's addresses as Address
 // groups: one full report per distinct Presented chain, then one per error.
 func writeAddressGroups(w io.Writer, p palette, results []scan.Result, withPEM bool) {
-	var order []string
-	groups := map[string][]scan.Result{}
+	var order []groupKey
+	groups := map[groupKey][]scan.Result{}
 	for _, r := range results {
-		k := groupKey(r)
+		k := keyOf(r)
 		if _, ok := groups[k]; !ok {
 			order = append(order, k)
 		}
@@ -219,7 +213,7 @@ func writeDiffs(w io.Writer, p palette, g []scan.Result) {
 	}{
 		{"TLS version", func(r scan.Result) string { return r.TLSVersion }},
 		{"Cipher suite", func(r scan.Result) string { return r.CipherSuite }},
-		{"Revocation", revocationSummary},
+		{"OCSP staple", stapleSummary},
 	}
 	for _, f := range fields {
 		var values []string
@@ -245,11 +239,14 @@ func writeDiffs(w io.Writer, p palette, g []scan.Result) {
 	}
 }
 
-// revocationSummary lists every Revocation status result of a Scan's chain.
-func revocationSummary(r scan.Result) string {
+// stapleSummary lists the stapled OCSP result of each certificate in a Scan's chain.
+func stapleSummary(r scan.Result) string {
 	var parts []string
 	for _, c := range r.Chain {
 		for _, rv := range c.Revocation {
+			if rv.Source != revocation.Staple {
+				continue
+			}
 			parts = append(parts, string(rv.Status)+"/"+string(rv.Source))
 		}
 	}

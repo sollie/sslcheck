@@ -73,7 +73,7 @@ sslcheck --all-ips example.com
 Pretty output collapses addresses that presented the same leaf and chain, or
 failed with the same error, into one *address group* with a single full report,
 under a header such as `3 addresses, 2 distinct`. Differences in TLS version,
-cipher suite or revocation status between addresses of one group are listed
+cipher suite or stapled OCSP response between addresses of one group are listed
 below its report, and errored groups come last. A hostname with one address is
 printed as usual. `json`, `yaml` and `toml` stay flat: one result per address,
 each with an `address` field.
@@ -100,7 +100,9 @@ SCTs and one verdict per trust store with its path, anchor and findings.
 
 `json`, `yaml` and `toml` carry the same data in a stable structure with a
 top-level `schema_version` (currently `1`) and a `results` list, one entry per
-target. Each result includes a `verdicts` list with one entry per trust store
+target (one per address with `--all-ips`, each with an `address` field; the
+version stays `1` because the field and the extra entries only appear when the
+flag is given). Each result includes a `verdicts` list with one entry per trust store
 (`store`, `store_info`, `pass`, `unavailable`, `reasons`, `path`, `anchor`,
 `hostname_match` and `findings` with `severity` and `message`).
 

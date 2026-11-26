@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/signal"
 	"slices"
@@ -168,7 +167,7 @@ func execute(ctx context.Context, cfg config, stdout, stderr io.Writer, env map[
 	opts.Stores = stores
 	if opts.AllIPs {
 		for _, t := range cfg.targets {
-			if net.ParseIP(t.Host) != nil {
+			if t.IsIP() {
 				_, _ = fmt.Fprintf(stderr, "sslcheck: --all-ips ignored for IP address %s\n", t.Host)
 			}
 		}
