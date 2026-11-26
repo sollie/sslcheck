@@ -89,7 +89,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 		ipv4      = fs.BoolP("ipv4", "4", false, "connect over IPv4 only")
 		ipv6      = fs.BoolP("ipv6", "6", false, "connect over IPv6 only")
 		startTLS  = fs.String("starttls", "", "upgrade with STARTTLS before the handshake: smtp, imap, pop3 or none (default: inferred from port)")
-		conc      = fs.Int("concurrency", 8, "maximum number of Targets scanned in parallel")
+		conc      = fs.Int("concurrency", 8, "maximum number of Scans run in parallel")
 		allIPs    = fs.Bool("all-ips", false, "scan every address a hostname resolves to, not just one")
 		noColor   = fs.Bool("no-color", false, "disable colour output")
 		format    = fs.StringP("format", "f", "pretty", "output format: pretty, json, yaml or toml")

@@ -103,3 +103,37 @@ func TestAllIPsIgnoredForIPLiteral(t *testing.T) {
 		t.Errorf("IP literal should be scanned once without an address, got %+v", rep.Results)
 	}
 }
+
+func TestAllIPsTimeoutIsPerAddress(t *testing.T) {
+	requireLocalhostDual(t)
+	root := testutil.NewCA(t, "Test Root")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "a.test", DNSNames: []string{"localhost"}})
+	port := strconv.Itoa(testutil.StartTLSV4HangingV6(t, leaf))
+	code, out, _ := runCLI(t, nil, "-f", "json", "--all-ips", "--timeout", "500ms", "localhost:"+port)
+	if code != 1 {
+		t.Errorf("exit %d, want 1 for the hanging address", code)
+	}
+	rep := decode(t, "json", out)
+	first, last := rep.Results[0], rep.Results[len(rep.Results)-1]
+	if first.Address != "127.0.0.1" || first.Error != "" {
+		t.Errorf("the responsive address should still be scanned, got %+v", first)
+	}
+	if last.Address != "::1" || last.Error == "" {
+		t.Errorf("the hanging address should time out, got %+v", last)
+	}
+}
+
+func TestAllIPsKeepsOrderWithConcurrencyOne(t *testing.T) {
+	port, _, _ := allIPsFixture(t)
+	code, out, errs := runCLI(t, nil, "-f", "json", "--all-ips", "--concurrency", "1", "localhost:"+port, "localhost:"+port)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errs)
+	}
+	var addrs []string
+	for _, r := range decode(t, "json", out).Results {
+		addrs = append(addrs, r.Address)
+	}
+	if got, want := strings.Join(addrs, ","), "127.0.0.1,::1,127.0.0.1,::1"; got != want {
+		t.Errorf("addresses = %s, want %s", got, want)
+	}
+}

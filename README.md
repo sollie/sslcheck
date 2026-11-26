@@ -47,7 +47,7 @@ sslcheck --sni www.example.com 192.0.2.10
 | `--timeout` | Timeout for connect and handshake (default `5s`). |
 | `-4, --ipv4` | Connect over IPv4 only. |
 | `-6, --ipv6` | Connect over IPv6 only (not combinable with `-4`). |
-| `--concurrency` | Maximum targets scanned in parallel (default `8`, minimum `1`). |
+| `--concurrency` | Maximum Scans run in parallel (default `8`, minimum `1`). |
 | `--starttls` | `smtp`, `imap`, `pop3` or `none`. Default: inferred from the port. |
 | `--trust-store` | PEM file of roots to verify against, replacing the Mozilla and system stores. |
 | `--revocation` | Also query live OCSP (CRL when no OCSP URL) for every certificate except the root. This contacts URLs supplied by the certificates; see [Revocation](#revocation). |

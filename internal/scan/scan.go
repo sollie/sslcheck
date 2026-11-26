@@ -143,7 +143,7 @@ type Options struct {
 	CTLogs *ct.LogList
 	// Stores are the Trust stores each Presented chain is verified against.
 	Stores []truststore.Store
-	// Concurrency is the maximum number of Targets scanned in parallel; values below 1 mean 1.
+	// Concurrency is the maximum number of Scans run in parallel; values below 1 mean 1.
 	Concurrency int
 	// Now is the clock used for expiry, revocation and SCT checks; defaults to time.Now.
 	Now func() time.Time
@@ -198,27 +198,23 @@ func (r Result) Failed() bool {
 	return false
 }
 
-// ScanAll scans targets with at most opts.Concurrency in flight; results keep
-// input order. With opts.AllIPs a hostname Target yields one Result per
-// resolved address, v4 before v6 and ascending.
+// ScanAll runs at most opts.Concurrency Scans at once; results keep input
+// order. With opts.AllIPs a hostname Target yields one Result per resolved
+// address, v4 before v6 and ascending, regardless of completion order.
 func ScanAll(ctx context.Context, targets []Target, opts Options) []Result {
 	groups := make([][]Result, len(targets))
 	sem := make(chan struct{}, max(opts.Concurrency, 1))
 	var wg sync.WaitGroup
 	for i, t := range targets {
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-		}
-		if ctx.Err() != nil {
+		if !acquire(ctx, sem) {
 			// Admission stops: every unstarted Target gets an error result.
 			groups[i] = []Result{{Target: t, Err: ctx.Err()}}
 			continue
 		}
 		wg.Add(1)
 		go func() {
-			defer func() { <-sem; wg.Done() }()
-			groups[i] = scanTarget(ctx, t, opts)
+			defer wg.Done()
+			groups[i] = scanTarget(ctx, t, opts, sem)
 		}()
 	}
 	wg.Wait()
@@ -229,21 +225,51 @@ func ScanAll(ctx context.Context, targets []Target, opts Options) []Result {
 	return results
 }
 
-// scanTarget scans t once, or once per resolved address under opts.AllIPs.
-func scanTarget(ctx context.Context, t Target, opts Options) []Result {
+// acquire takes a slot in sem, or reports false once ctx is done.
+func acquire(ctx context.Context, sem chan struct{}) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case sem <- struct{}{}:
+		if ctx.Err() != nil {
+			<-sem
+			return false
+		}
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// scanTarget scans t once, or once per resolved address under opts.AllIPs. It
+// is entered holding one slot of sem and gives it back before returning.
+func scanTarget(ctx context.Context, t Target, opts Options, sem chan struct{}) []Result {
 	if !opts.AllIPs || net.ParseIP(t.Host) != nil {
+		defer func() { <-sem }()
 		return []Result{scanOne(ctx, t, opts)}
 	}
 	addrs, err := resolve(ctx, t.Host, opts)
+	<-sem
 	if err != nil {
 		return []Result{{Target: t, Err: err}}
 	}
-	results := make([]Result, 0, len(addrs))
-	for _, a := range addrs {
+	results := make([]Result, len(addrs))
+	var wg sync.WaitGroup
+	for i, a := range addrs {
 		pinned := t
 		pinned.IP = a.String()
-		results = append(results, scanOne(ctx, pinned, opts))
+		if !acquire(ctx, sem) {
+			results[i] = Result{Target: pinned, Err: ctx.Err()}
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			results[i] = scanOne(ctx, pinned, opts)
+		}()
 	}
+	wg.Wait()
 	return results
 }
 

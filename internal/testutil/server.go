@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 )
 
@@ -106,6 +107,39 @@ func StartTLSDual(t testing.TB, v4, v6 *Cert) int {
 				defer func() { _ = conn.Close() }()
 				_ = conn.(*tls.Conn).Handshake()
 			}()
+		}
+	}()
+	return first.Port
+}
+
+// StartTLSV4HangingV6 is StartTLSDual where the [::1] side accepts
+// connections and never answers the handshake.
+func StartTLSV4HangingV6(t testing.TB, v4 *Cert) int {
+	t.Helper()
+	first := startTLS(t, nil, nil, nil, v4)
+	ln, err := net.Listen("tcp", net.JoinHostPort("::1", strconv.Itoa(first.Port)))
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
 		}
 	}()
 	return first.Port
