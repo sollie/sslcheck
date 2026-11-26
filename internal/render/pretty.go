@@ -203,7 +203,57 @@ func writeAddressGroups(w io.Writer, p palette, results []scan.Result, withPEM b
 		g := groups[k]
 		_, _ = fmt.Fprintf(w, "\n%s\n", p.heading.Sprintf("Address group %d of %d: %s", n+1, len(order), Safe(addressList(g))))
 		writeBody(w, p, g[0], withPEM)
+		writeDiffs(w, p, g)
 	}
+}
+
+// writeDiffs notes Evidence that differs between addresses sharing a Presented
+// chain, so a node on an older protocol or without a staple still shows.
+func writeDiffs(w io.Writer, p palette, g []scan.Result) {
+	if g[0].Err != nil {
+		return
+	}
+	fields := []struct {
+		name string
+		get  func(scan.Result) string
+	}{
+		{"TLS version", func(r scan.Result) string { return r.TLSVersion }},
+		{"Cipher suite", func(r scan.Result) string { return r.CipherSuite }},
+		{"Revocation", revocationSummary},
+	}
+	for _, f := range fields {
+		var values []string
+		byValue := map[string][]string{}
+		for _, r := range g {
+			v := f.get(r)
+			if _, ok := byValue[v]; !ok {
+				values = append(values, v)
+			}
+			byValue[v] = append(byValue[v], r.Target.IP)
+		}
+		if len(values) < 2 {
+			continue
+		}
+		parts := make([]string, len(values))
+		for i, v := range values {
+			if v == "" {
+				v = "none"
+			}
+			parts[i] = fmt.Sprintf("%s (%s)", v, strings.Join(byValue[values[i]], ", "))
+		}
+		_, _ = fmt.Fprintf(w, "\n  %s %s\n", p.warn.Sprintf("%s differs:", f.name), Safe(strings.Join(parts, "; ")))
+	}
+}
+
+// revocationSummary lists every Revocation status result of a Scan's chain.
+func revocationSummary(r scan.Result) string {
+	var parts []string
+	for _, c := range r.Chain {
+		for _, rv := range c.Revocation {
+			parts = append(parts, string(rv.Status)+"/"+string(rv.Source))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func addressList(g []scan.Result) string {

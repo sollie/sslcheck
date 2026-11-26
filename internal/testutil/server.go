@@ -87,7 +87,18 @@ func startTLS(t testing.TB, suites []uint16, staple []byte, scts [][]byte, leaf 
 // addresses. It skips the test when IPv6 loopback or such a port is unavailable.
 func StartTLSDual(t testing.TB, v4, v6 *Cert) int {
 	t.Helper()
-	first := startTLS(t, nil, nil, nil, v4)
+	return startDual(t, startTLS(t, nil, nil, nil, v4), v6)
+}
+
+// StartTLSDualV4TLS12 is StartTLSDual with one certificate, where the
+// 127.0.0.1 side only speaks TLS 1.2 and the [::1] side also speaks TLS 1.3.
+func StartTLSDualV4TLS12(t testing.TB, leaf *Cert) int {
+	t.Helper()
+	return startDual(t, startTLS(t, []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256}, nil, nil, leaf), leaf)
+}
+
+func startDual(t testing.TB, first *Server, v6 *Cert) int {
+	t.Helper()
 	cfg := &tls.Config{
 		Certificates: []tls.Certificate{{Certificate: [][]byte{v6.DER}, PrivateKey: v6.Signer()}},
 		MinVersion:   tls.VersionTLS12,

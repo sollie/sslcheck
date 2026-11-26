@@ -181,3 +181,29 @@ func TestPrettySingleAddressOutputIsUnchanged(t *testing.T) {
 		t.Errorf("--all-ips changed single-address output:\n--- without\n%s\n--- with\n%s", plain, all)
 	}
 }
+
+func TestPrettyShowsTLSVersionDifferenceWithinGroup(t *testing.T) {
+	requireLocalhostDual(t)
+	root := testutil.NewCA(t, "Test Root")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "a.test", DNSNames: []string{"localhost"}})
+	port := strconv.Itoa(testutil.StartTLSDualV4TLS12(t, leaf))
+	_, out, _ := runCLI(t, nil, "--no-color", "--all-ips", "localhost:"+port)
+	if !strings.Contains(out, "2 addresses, 1 distinct") {
+		t.Errorf("same chain should be one group:\n%s", out)
+	}
+	if !strings.Contains(out, "TLS version differs: TLS 1.2 (127.0.0.1); TLS 1.3 (::1)") {
+		t.Errorf("missing TLS version diff line:\n%s", out)
+	}
+}
+
+func TestPrettyListsErroredAddressGroupLast(t *testing.T) {
+	requireLocalhostDual(t)
+	root := testutil.NewCA(t, "Test Root")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "a.test", DNSNames: []string{"localhost"}})
+	srv := testutil.StartTLS(t, leaf) // ::1 refuses
+	_, out, _ := runCLI(t, nil, "--no-color", "--all-ips", "localhost:"+strconv.Itoa(srv.Port))
+	ok, bad := strings.Index(out, "Address group 1 of 2: 127.0.0.1"), strings.Index(out, "Address group 2 of 2: ::1")
+	if ok < 0 || bad < ok || !strings.Contains(out[bad:], "Error:") {
+		t.Errorf("want the errored group listed last:\n%s", out)
+	}
+}
