@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 )
 
@@ -79,4 +80,78 @@ func startTLS(t testing.TB, suites []uint16, staple []byte, scts [][]byte, leaf 
 	host, port, _ := net.SplitHostPort(ln.Addr().String())
 	p, _ := strconv.Atoi(port)
 	return &Server{Addr: ln.Addr().String(), Host: host, Port: p, ln: ln}
+}
+
+// StartTLSDual starts two TLS servers on the same port, one on 127.0.0.1
+// presenting v4 and one on [::1] presenting v6, so that localhost:Port has two
+// addresses. It skips the test when IPv6 loopback or such a port is unavailable.
+func StartTLSDual(t testing.TB, v4, v6 *Cert) int {
+	t.Helper()
+	return startDual(t, startTLS(t, nil, nil, nil, v4), v6)
+}
+
+// StartTLSDualV4TLS12 is StartTLSDual with one certificate, where the
+// 127.0.0.1 side only speaks TLS 1.2 and the [::1] side also speaks TLS 1.3.
+func StartTLSDualV4TLS12(t testing.TB, leaf *Cert) int {
+	t.Helper()
+	return startDual(t, startTLS(t, []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256}, nil, nil, leaf), leaf)
+}
+
+func startDual(t testing.TB, first *Server, v6 *Cert) int {
+	t.Helper()
+	cfg := &tls.Config{
+		Certificates: []tls.Certificate{{Certificate: [][]byte{v6.DER}, PrivateKey: v6.Signer()}},
+		MinVersion:   tls.VersionTLS12,
+	}
+	ln, err := tls.Listen("tcp", net.JoinHostPort("::1", strconv.Itoa(first.Port)), cfg)
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				_ = conn.(*tls.Conn).Handshake()
+			}()
+		}
+	}()
+	return first.Port
+}
+
+// StartTLSV4HangingV6 is StartTLSDual where the [::1] side accepts
+// connections and never answers the handshake.
+func StartTLSV4HangingV6(t testing.TB, v4 *Cert) int {
+	t.Helper()
+	first := startTLS(t, nil, nil, nil, v4)
+	ln, err := net.Listen("tcp", net.JoinHostPort("::1", strconv.Itoa(first.Port)))
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+	return first.Port
 }

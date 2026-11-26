@@ -24,7 +24,9 @@ type Report struct {
 
 // Result is one Target's Scan.
 type Result struct {
-	Target      string        `json:"target" yaml:"target" toml:"target"`
+	Target string `json:"target" yaml:"target" toml:"target"`
+	// Address is the resolved IP this Scan was pinned to under --all-ips.
+	Address     string        `json:"address,omitempty" yaml:"address,omitempty" toml:"address,omitempty"`
 	SNI         string        `json:"sni,omitempty" yaml:"sni,omitempty" toml:"sni,omitempty"`
 	TLSVersion  string        `json:"tls_version,omitempty" yaml:"tls_version,omitempty" toml:"tls_version,omitempty"`
 	CipherSuite string        `json:"cipher_suite,omitempty" yaml:"cipher_suite,omitempty" toml:"cipher_suite,omitempty"`
@@ -102,7 +104,7 @@ type Revocation struct {
 func NewReport(results []scan.Result, withPEM bool) Report {
 	rep := Report{SchemaVersion: SchemaVersion, Results: make([]Result, 0, len(results))}
 	for _, r := range results {
-		out := Result{Target: r.Target.Address(), SNI: r.Target.SNI, TLSVersion: r.TLSVersion, CipherSuite: r.CipherSuite}
+		out := Result{Target: r.Target.Address(), Address: r.Target.IP, SNI: r.Target.SNI, TLSVersion: r.TLSVersion, CipherSuite: r.CipherSuite}
 		if r.Err != nil {
 			out.Error = r.Err.Error()
 		}

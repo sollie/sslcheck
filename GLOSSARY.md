@@ -47,3 +47,7 @@ _Avoid_: CT proof, log entry
 **Finding**:
 A single problem or notice raised in a Verdict. It is either a failure or a warning.
 _Avoid_: Issue, error
+
+**Address group**:
+The addresses of one Target whose Scans presented the same leaf and Presented chain, or failed with the same error. Pretty Reports show one section per Address group.
+_Avoid_: Cluster, pool

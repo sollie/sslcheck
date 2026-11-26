@@ -15,7 +15,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,16 +29,33 @@ import (
 	"github.com/sollie/sslcheck/internal/verify"
 )
 
+const defaultTimeout = 5 * time.Second
+
 // Target is a host, port and optional SNI name to scan.
 type Target struct {
 	Host string
 	Port int
 	SNI  string
+	// IP pins the Scan to one resolved address of Host; empty means dial Host.
+	IP string
 }
 
 // Address returns host:port, bracketing IPv6 literals.
 func (t Target) Address() string {
 	return net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
+}
+
+// IsIP reports whether the host is an IP literal, which is never resolved.
+func (t Target) IsIP() bool {
+	return net.ParseIP(t.Host) != nil
+}
+
+// dialAddress is the address to connect to: the pinned IP when set, else Address.
+func (t Target) dialAddress() string {
+	if t.IP == "" {
+		return t.Address()
+	}
+	return net.JoinHostPort(t.IP, strconv.Itoa(t.Port))
 }
 
 // ParseTarget accepts host, host:port and https://host[:port].
@@ -116,6 +135,9 @@ type Options struct {
 	// StartTLS is "smtp", "imap" or "pop3" to upgrade in-band before the
 	// handshake, "none" to force implicit TLS, or "" to infer from the port.
 	StartTLS string
+	// AllIPs scans every address a hostname Target resolves to instead of the
+	// one the OS picks. IP-literal Targets are scanned once.
+	AllIPs bool
 	// Revocation enables live OCSP/CRL lookups; the stapled response is
 	// always checked.
 	Revocation bool
@@ -126,7 +148,7 @@ type Options struct {
 	CTLogs *ct.LogList
 	// Stores are the Trust stores each Presented chain is verified against.
 	Stores []truststore.Store
-	// Concurrency is the maximum number of Targets scanned in parallel; values below 1 mean 1.
+	// Concurrency is the maximum number of Scans run in parallel; values below 1 mean 1.
 	Concurrency int
 	// Now is the clock used for expiry, revocation and SCT checks; defaults to time.Now.
 	Now func() time.Time
@@ -155,8 +177,11 @@ type Certificate struct {
 
 // Result is the outcome of scanning one Target.
 type Result struct {
-	Target     Target
-	TLSVersion string
+	Target Target
+	// TargetIndex is the position of the Target this Scan belongs to in the
+	// list given to ScanAll; address Scans of one Target share it.
+	TargetIndex int
+	TLSVersion  string
 	// CipherSuite is the negotiated cipher suite; WeakCipher is set when it is insecure or lacks forward secrecy.
 	CipherSuite string
 	WeakCipher  bool
@@ -181,29 +206,109 @@ func (r Result) Failed() bool {
 	return false
 }
 
-// ScanAll scans targets with at most opts.Concurrency in flight; results keep input order.
+// ScanAll runs at most opts.Concurrency Scans at once; results keep input
+// order. With opts.AllIPs a hostname Target yields one Result per resolved
+// address, v4 before v6 and ascending, regardless of completion order.
 func ScanAll(ctx context.Context, targets []Target, opts Options) []Result {
-	results := make([]Result, len(targets))
+	groups := make([][]Result, len(targets))
 	sem := make(chan struct{}, max(opts.Concurrency, 1))
 	var wg sync.WaitGroup
 	for i, t := range targets {
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-		}
-		if ctx.Err() != nil {
+		if !acquire(ctx, sem) {
 			// Admission stops: every unstarted Target gets an error result.
-			results[i] = Result{Target: t, Err: ctx.Err()}
+			groups[i] = []Result{{Target: t, Err: ctx.Err()}}
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			groups[i] = scanTarget(ctx, t, opts, sem)
+		}()
+	}
+	wg.Wait()
+	var results []Result
+	for i, g := range groups {
+		for _, r := range g {
+			r.TargetIndex = i
+			results = append(results, r)
+		}
+	}
+	return results
+}
+
+// acquire takes a slot in sem, or reports false once ctx is done.
+func acquire(ctx context.Context, sem chan struct{}) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case sem <- struct{}{}:
+		if ctx.Err() != nil {
+			<-sem
+			return false
+		}
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// scanTarget scans t once, or once per resolved address under opts.AllIPs. It
+// is entered holding one slot of sem and gives it back before returning.
+func scanTarget(ctx context.Context, t Target, opts Options, sem chan struct{}) []Result {
+	if !opts.AllIPs || t.IsIP() {
+		defer func() { <-sem }()
+		return []Result{scanOne(ctx, t, opts)}
+	}
+	addrs, err := resolve(ctx, t.Host, opts)
+	<-sem
+	if err != nil {
+		return []Result{{Target: t, Err: err}}
+	}
+	results := make([]Result, len(addrs))
+	var wg sync.WaitGroup
+	for i, a := range addrs {
+		pinned := t
+		pinned.IP = a.String()
+		if !acquire(ctx, sem) {
+			results[i] = Result{Target: pinned, Err: ctx.Err()}
 			continue
 		}
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			results[i] = scanOne(ctx, t, opts)
+			results[i] = scanOne(ctx, pinned, opts)
 		}()
 	}
 	wg.Wait()
 	return results
+}
+
+// resolve returns the distinct addresses of host for opts.Network, v4 before
+// v6 and ascending.
+func resolve(ctx context.Context, host string, opts Options) ([]netip.Addr, error) {
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	network := "ip"
+	switch opts.Network {
+	case "tcp4":
+		network = "ip4"
+	case "tcp6":
+		network = "ip6"
+	}
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, network, host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", host, err)
+	}
+	for i, a := range addrs {
+		addrs[i] = a.Unmap()
+	}
+	slices.SortFunc(addrs, netip.Addr.Compare)
+	return slices.Compact(addrs), nil
 }
 
 // scanOne connects to t, completes the handshake without verifying it,
@@ -217,7 +322,7 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 	// One clock reading serves every stage of this Scan.
 	at := clock()
 	if opts.Timeout <= 0 {
-		opts.Timeout = 5 * time.Second
+		opts.Timeout = defaultTimeout
 	}
 	network := opts.Network
 	if network == "" {
