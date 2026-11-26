@@ -47,6 +47,7 @@ sslcheck --sni www.example.com 192.0.2.10
 | `--timeout` | Timeout for connect and handshake (default `5s`). |
 | `-4, --ipv4` | Connect over IPv4 only. |
 | `-6, --ipv6` | Connect over IPv6 only (not combinable with `-4`). |
+| `--all-ips` | Scan every address a hostname resolves to, not just one. See [All addresses](#all-addresses). |
 | `--concurrency` | Maximum Scans run in parallel (default `8`, minimum `1`). |
 | `--starttls` | `smtp`, `imap`, `pop3` or `none`. Default: inferred from the port. |
 | `--trust-store` | PEM file of roots to verify against, replacing the Mozilla and system stores. |
@@ -57,6 +58,28 @@ sslcheck --sni www.example.com 192.0.2.10
 | `--version` | Print version and exit. |
 
 Boolean flags also accept `=true` / `=false`.
+
+### All addresses
+
+A hostname can resolve to several addresses. `--all-ips` runs one Scan per
+address (IPv4 first, then IPv6, each ascending), sending the target host, or
+`--sni`, as the server name to each. IP-address targets are scanned once, with a
+note on stderr. `--timeout` applies to each address.
+
+```sh
+sslcheck --all-ips example.com
+```
+
+Pretty output collapses addresses that presented the same leaf and chain, or
+failed with the same error, into one *address group* with a single full report,
+under a header such as `3 addresses, 2 distinct`. Differences in TLS version,
+cipher suite or revocation status between addresses of one group are listed
+below its report, and errored groups come last. A hostname with one address is
+printed as usual. `json`, `yaml` and `toml` stay flat: one result per address,
+each with an `address` field.
+
+Any address that errors makes the exit code 1, and with `--strict` any failing
+verdict makes it 2.
 
 ### Exit codes
 
