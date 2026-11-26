@@ -4,6 +4,8 @@ package render
 import (
 	"fmt"
 	"io"
+	"net/netip"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -118,55 +120,140 @@ func safeAll(ss []string) []string {
 func PrettyPEM(out io.Writer, results []scan.Result, level ColorLevel, withPEM bool) error {
 	w := &errWriter{w: out}
 	p := newPalette(level)
-	for i, r := range results {
+	for i := 0; i < len(results); {
+		n := addressRun(results[i:])
 		if i > 0 {
 			_, _ = fmt.Fprintln(w)
 		}
-		heading := "Target " + Safe(r.Target.Address())
-		if r.Target.IP != "" {
-			heading += " (" + Safe(r.Target.IP) + ")"
+		if n > 1 {
+			writeAddressGroups(w, p, results[i:i+n], withPEM)
+		} else {
+			r := results[i]
+			r.Target.IP = ""
+			writeHeading(w, p, r.Target)
+			writeBody(w, p, r, withPEM)
 		}
-		_, _ = fmt.Fprintf(w, "%s\n", p.target.Sprint(heading))
-		if r.Err != nil {
-			_, _ = fmt.Fprintf(w, "  %s %v\n", p.bad.Sprint("Error:"), Safe(r.Err.Error()))
-			continue
-		}
-		_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprint("TLS version:"), tlsVersion(p, r.TLSVersion))
-		if r.CipherSuite != "" {
-			cs := p.ok.Sprint(r.CipherSuite)
-			if r.WeakCipher {
-				cs = p.warn.Sprint(r.CipherSuite)
-			}
-			_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprint("Cipher suite:"), cs)
-		}
-		for n, c := range r.Chain {
-			_, _ = fmt.Fprintf(w, "\n%s\n", p.heading.Sprintf("Certificate %d of %d", n+1, len(r.Chain)))
-			field := func(name, val string) {
-				_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprintf("%-14s", name+":"), val)
-			}
-			field("Subject", p.value.Sprint(Safe(c.Subject)))
-			if len(c.SANs) > 0 {
-				field("SANs", strings.Join(safeAll(c.SANs), ", "))
-			}
-			field("Issuer", Safe(c.Issuer))
-			field("Serial", p.dim.Sprint(c.Serial))
-			field("Not Before", c.NotBefore.UTC().Format("2006-01-02 15:04:05 MST"))
-			field("Not After", c.NotAfter.UTC().Format("2006-01-02 15:04:05 MST"))
-			field("Expiry", expiry(p, c))
-			field("Signature", c.SigAlgorithm)
-			field("Key", fmt.Sprintf("%s %d bits", c.KeyType, c.KeyBits))
-			field("SHA-256", p.dim.Sprint(c.SHA256))
-			for _, rv := range c.Revocation {
-				field("Revocation", revocationText(p, rv))
-			}
-			if withPEM {
-				_, _ = fmt.Fprintf(w, "\n%s", c.PEM)
-			}
-		}
-		writeCT(w, p, r.CT)
-		writeVerdicts(w, p, r.Verdicts)
+		i += n
 	}
 	return w.err
+}
+
+func writeHeading(w io.Writer, p palette, t scan.Target) {
+	_, _ = fmt.Fprintf(w, "%s\n", p.target.Sprintf("Target %s", Safe(t.Address())))
+}
+
+// addressRun is how many leading results are address Scans of one Target
+// (under --all-ips); any other result counts as a run of one.
+func addressRun(results []scan.Result) int {
+	first := results[0].Target
+	if first.IP == "" {
+		return 1
+	}
+	n := 1
+	for n < len(results) {
+		t := results[n].Target
+		if t.IP == "" || t.Host != first.Host || t.Port != first.Port || t.SNI != first.SNI {
+			break
+		}
+		// Addresses ascend within a Target, so a repeat or step back starts the next one.
+		prev, err1 := netip.ParseAddr(results[n-1].Target.IP)
+		cur, err2 := netip.ParseAddr(t.IP)
+		if err1 != nil || err2 != nil || cur.Compare(prev) <= 0 {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// groupKey identifies what an address presented: the Presented chain, or the
+// error that stopped the Scan.
+func groupKey(r scan.Result) string {
+	if r.Err != nil {
+		return "error:" + r.Err.Error()
+	}
+	var b strings.Builder
+	for _, c := range r.Chain {
+		b.WriteString(c.SHA256)
+		b.WriteByte(',')
+	}
+	return b.String()
+}
+
+// writeAddressGroups prints the Scans of one Target's addresses as Address
+// groups: one full report per distinct Presented chain, then one per error.
+func writeAddressGroups(w io.Writer, p palette, results []scan.Result, withPEM bool) {
+	var order []string
+	groups := map[string][]scan.Result{}
+	for _, r := range results {
+		k := groupKey(r)
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], r)
+	}
+	// Errored groups go last; the sort keeps first-seen order within each kind.
+	sort.SliceStable(order, func(i, j int) bool {
+		return groups[order[i]][0].Err == nil && groups[order[j]][0].Err != nil
+	})
+	t := results[0].Target
+	writeHeading(w, p, t)
+	_, _ = fmt.Fprintf(w, "  %s %d addresses, %d distinct\n", p.label.Sprint("Addresses:"), len(results), len(order))
+	for n, k := range order {
+		g := groups[k]
+		_, _ = fmt.Fprintf(w, "\n%s\n", p.heading.Sprintf("Address group %d of %d: %s", n+1, len(order), Safe(addressList(g))))
+		writeBody(w, p, g[0], withPEM)
+	}
+}
+
+func addressList(g []scan.Result) string {
+	ips := make([]string, len(g))
+	for i, r := range g {
+		ips[i] = r.Target.IP
+	}
+	return strings.Join(ips, ", ")
+}
+
+// writeBody prints a Scan's outcome below its heading.
+func writeBody(w io.Writer, p palette, r scan.Result, withPEM bool) {
+	if r.Err != nil {
+		_, _ = fmt.Fprintf(w, "  %s %v\n", p.bad.Sprint("Error:"), Safe(r.Err.Error()))
+		return
+	}
+	_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprint("TLS version:"), tlsVersion(p, r.TLSVersion))
+	if r.CipherSuite != "" {
+		cs := p.ok.Sprint(r.CipherSuite)
+		if r.WeakCipher {
+			cs = p.warn.Sprint(r.CipherSuite)
+		}
+		_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprint("Cipher suite:"), cs)
+	}
+	for n, c := range r.Chain {
+		_, _ = fmt.Fprintf(w, "\n%s\n", p.heading.Sprintf("Certificate %d of %d", n+1, len(r.Chain)))
+		field := func(name, val string) {
+			_, _ = fmt.Fprintf(w, "  %s %s\n", p.label.Sprintf("%-14s", name+":"), val)
+		}
+		field("Subject", p.value.Sprint(Safe(c.Subject)))
+		if len(c.SANs) > 0 {
+			field("SANs", strings.Join(safeAll(c.SANs), ", "))
+		}
+		field("Issuer", Safe(c.Issuer))
+		field("Serial", p.dim.Sprint(c.Serial))
+		field("Not Before", c.NotBefore.UTC().Format("2006-01-02 15:04:05 MST"))
+		field("Not After", c.NotAfter.UTC().Format("2006-01-02 15:04:05 MST"))
+		field("Expiry", expiry(p, c))
+		field("Signature", c.SigAlgorithm)
+		field("Key", fmt.Sprintf("%s %d bits", c.KeyType, c.KeyBits))
+		field("SHA-256", p.dim.Sprint(c.SHA256))
+		for _, rv := range c.Revocation {
+			field("Revocation", revocationText(p, rv))
+		}
+		if withPEM {
+			_, _ = fmt.Fprintf(w, "\n%s", c.PEM)
+		}
+	}
+	writeCT(w, p, r.CT)
+	writeVerdicts(w, p, r.Verdicts)
 }
 
 // tlsVersion flags protocol versions older than TLS 1.2.

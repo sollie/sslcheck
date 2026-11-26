@@ -137,3 +137,47 @@ func TestAllIPsKeepsOrderWithConcurrencyOne(t *testing.T) {
 		t.Errorf("addresses = %s, want %s", got, want)
 	}
 }
+
+func TestPrettyGroupsAddressesByPresentedChain(t *testing.T) {
+	port, _, _ := allIPsFixture(t)
+	code, out, errs := runCLI(t, nil, "--no-color", "--all-ips", "localhost:"+port)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errs)
+	}
+	for _, want := range []string{"2 addresses, 2 distinct", "Address group 1 of 2: 127.0.0.1", "Address group 2 of 2: ::1", "CN=a.test", "CN=b.test"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestPrettyCollapsesAddressesWithSameChain(t *testing.T) {
+	requireLocalhostDual(t)
+	root := testutil.NewCA(t, "Test Root")
+	leaf := root.Issue(t, testutil.CertOpts{CommonName: "a.test", DNSNames: []string{"localhost"}})
+	port := strconv.Itoa(testutil.StartTLSDual(t, leaf, leaf))
+	_, out, _ := runCLI(t, nil, "--no-color", "--all-ips", "localhost:"+port)
+	if !strings.Contains(out, "2 addresses, 1 distinct") || !strings.Contains(out, "Address group 1 of 1: 127.0.0.1, ::1") {
+		t.Errorf("want one group listing both addresses:\n%s", out)
+	}
+	if n := strings.Count(out, "Certificate 1 of"); n != 1 {
+		t.Errorf("want one full report, got %d:\n%s", n, out)
+	}
+}
+
+func TestPrettyRepeatedTargetsStaySeparate(t *testing.T) {
+	port, _, _ := allIPsFixture(t)
+	_, out, _ := runCLI(t, nil, "--no-color", "--all-ips", "localhost:"+port, "localhost:"+port)
+	if n := strings.Count(out, "2 addresses, 2 distinct"); n != 2 {
+		t.Errorf("want a header per Target, got %d:\n%s", n, out)
+	}
+}
+
+func TestPrettySingleAddressOutputIsUnchanged(t *testing.T) {
+	port, _, _ := allIPsFixture(t)
+	_, plain, _ := runCLI(t, nil, "--no-color", "-4", "localhost:"+port)
+	_, all, _ := runCLI(t, nil, "--no-color", "-4", "--all-ips", "localhost:"+port)
+	if plain != all {
+		t.Errorf("--all-ips changed single-address output:\n--- without\n%s\n--- with\n%s", plain, all)
+	}
+}
