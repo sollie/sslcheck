@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"slices"
@@ -89,6 +90,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 		ipv6      = fs.BoolP("ipv6", "6", false, "connect over IPv6 only")
 		startTLS  = fs.String("starttls", "", "upgrade with STARTTLS before the handshake: smtp, imap, pop3 or none (default: inferred from port)")
 		conc      = fs.Int("concurrency", 8, "maximum number of Targets scanned in parallel")
+		allIPs    = fs.Bool("all-ips", false, "scan every address a hostname resolves to, not just one")
 		noColor   = fs.Bool("no-color", false, "disable colour output")
 		format    = fs.StringP("format", "f", "pretty", "output format: pretty, json, yaml or toml")
 		withPEM   = fs.Bool("pem", false, "include each certificate as PEM")
@@ -144,7 +146,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 		targets: targets,
 		opts: scan.Options{
 			Timeout: *timeout, SNI: *sni, Network: network, StartTLS: *startTLS,
-			Revocation: *revoc, AllowPrivateRevocation: *privRev, Concurrency: *conc,
+			AllIPs: *allIPs, Revocation: *revoc, AllowPrivateRevocation: *privRev, Concurrency: *conc,
 		},
 	}, nil
 }
@@ -164,6 +166,13 @@ func execute(ctx context.Context, cfg config, stdout, stderr io.Writer, env map[
 	opts := cfg.opts
 	opts.CTLogs = &logList
 	opts.Stores = stores
+	if opts.AllIPs {
+		for _, t := range cfg.targets {
+			if net.ParseIP(t.Host) != nil {
+				_, _ = fmt.Fprintf(stderr, "sslcheck: --all-ips ignored for IP address %s\n", t.Host)
+			}
+		}
+	}
 	results := scan.ScanAll(ctx, cfg.targets, opts)
 	code := 0
 	verdictFailed := false

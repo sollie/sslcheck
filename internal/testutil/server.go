@@ -80,3 +80,33 @@ func startTLS(t testing.TB, suites []uint16, staple []byte, scts [][]byte, leaf 
 	p, _ := strconv.Atoi(port)
 	return &Server{Addr: ln.Addr().String(), Host: host, Port: p, ln: ln}
 }
+
+// StartTLSDual starts two TLS servers on the same port, one on 127.0.0.1
+// presenting v4 and one on [::1] presenting v6, so that localhost:Port has two
+// addresses. It skips the test when IPv6 loopback or such a port is unavailable.
+func StartTLSDual(t testing.TB, v4, v6 *Cert) int {
+	t.Helper()
+	first := startTLS(t, nil, nil, nil, v4)
+	cfg := &tls.Config{
+		Certificates: []tls.Certificate{{Certificate: [][]byte{v6.DER}, PrivateKey: v6.Signer()}},
+		MinVersion:   tls.VersionTLS12,
+	}
+	ln, err := tls.Listen("tcp", net.JoinHostPort("::1", strconv.Itoa(first.Port)), cfg)
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				_ = conn.(*tls.Conn).Handshake()
+			}()
+		}
+	}()
+	return first.Port
+}

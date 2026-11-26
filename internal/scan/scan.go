@@ -15,7 +15,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,16 +29,28 @@ import (
 	"github.com/sollie/sslcheck/internal/verify"
 )
 
+const defaultTimeout = 5 * time.Second
+
 // Target is a host, port and optional SNI name to scan.
 type Target struct {
 	Host string
 	Port int
 	SNI  string
+	// IP pins the Scan to one resolved address of Host; empty means dial Host.
+	IP string
 }
 
 // Address returns host:port, bracketing IPv6 literals.
 func (t Target) Address() string {
 	return net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
+}
+
+// dialAddress is the address to connect to: the pinned IP when set, else Address.
+func (t Target) dialAddress() string {
+	if t.IP == "" {
+		return t.Address()
+	}
+	return net.JoinHostPort(t.IP, strconv.Itoa(t.Port))
 }
 
 // ParseTarget accepts host, host:port and https://host[:port].
@@ -116,6 +130,9 @@ type Options struct {
 	// StartTLS is "smtp", "imap" or "pop3" to upgrade in-band before the
 	// handshake, "none" to force implicit TLS, or "" to infer from the port.
 	StartTLS string
+	// AllIPs scans every address a hostname Target resolves to instead of the
+	// one the OS picks. IP-literal Targets are scanned once.
+	AllIPs bool
 	// Revocation enables live OCSP/CRL lookups; the stapled response is
 	// always checked.
 	Revocation bool
@@ -181,9 +198,11 @@ func (r Result) Failed() bool {
 	return false
 }
 
-// ScanAll scans targets with at most opts.Concurrency in flight; results keep input order.
+// ScanAll scans targets with at most opts.Concurrency in flight; results keep
+// input order. With opts.AllIPs a hostname Target yields one Result per
+// resolved address, v4 before v6 and ascending.
 func ScanAll(ctx context.Context, targets []Target, opts Options) []Result {
-	results := make([]Result, len(targets))
+	groups := make([][]Result, len(targets))
 	sem := make(chan struct{}, max(opts.Concurrency, 1))
 	var wg sync.WaitGroup
 	for i, t := range targets {
@@ -193,17 +212,66 @@ func ScanAll(ctx context.Context, targets []Target, opts Options) []Result {
 		}
 		if ctx.Err() != nil {
 			// Admission stops: every unstarted Target gets an error result.
-			results[i] = Result{Target: t, Err: ctx.Err()}
+			groups[i] = []Result{{Target: t, Err: ctx.Err()}}
 			continue
 		}
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			results[i] = scanOne(ctx, t, opts)
+			groups[i] = scanTarget(ctx, t, opts)
 		}()
 	}
 	wg.Wait()
+	var results []Result
+	for _, g := range groups {
+		results = append(results, g...)
+	}
 	return results
+}
+
+// scanTarget scans t once, or once per resolved address under opts.AllIPs.
+func scanTarget(ctx context.Context, t Target, opts Options) []Result {
+	if !opts.AllIPs || net.ParseIP(t.Host) != nil {
+		return []Result{scanOne(ctx, t, opts)}
+	}
+	addrs, err := resolve(ctx, t.Host, opts)
+	if err != nil {
+		return []Result{{Target: t, Err: err}}
+	}
+	results := make([]Result, 0, len(addrs))
+	for _, a := range addrs {
+		pinned := t
+		pinned.IP = a.String()
+		results = append(results, scanOne(ctx, pinned, opts))
+	}
+	return results
+}
+
+// resolve returns the distinct addresses of host for opts.Network, v4 before
+// v6 and ascending.
+func resolve(ctx context.Context, host string, opts Options) ([]netip.Addr, error) {
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	network := "ip"
+	switch opts.Network {
+	case "tcp4":
+		network = "ip4"
+	case "tcp6":
+		network = "ip6"
+	}
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, network, host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", host, err)
+	}
+	for i, a := range addrs {
+		addrs[i] = a.Unmap()
+	}
+	slices.SortFunc(addrs, netip.Addr.Compare)
+	return slices.Compact(addrs), nil
 }
 
 // scanOne connects to t, completes the handshake without verifying it,
@@ -217,7 +285,7 @@ func scanOne(ctx context.Context, t Target, opts Options) Result {
 	// One clock reading serves every stage of this Scan.
 	at := clock()
 	if opts.Timeout <= 0 {
-		opts.Timeout = 5 * time.Second
+		opts.Timeout = defaultTimeout
 	}
 	network := opts.Network
 	if network == "" {

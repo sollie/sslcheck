@@ -38,13 +38,13 @@ func connect(ctx context.Context, t Target, opts connectOptions, at time.Time) (
 	var tlsConn *tls.Conn
 	if proto == "" || proto == starttls.None {
 		dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
-		conn, err := dialer.DialContext(ctx, opts.network, t.Address())
+		conn, err := dialer.DialContext(ctx, opts.network, t.dialAddress())
 		if err != nil {
 			return verify.Evidence{}, err
 		}
 		tlsConn = conn.(*tls.Conn)
 	} else {
-		conn, err := (&net.Dialer{}).DialContext(ctx, opts.network, t.Address())
+		conn, err := (&net.Dialer{}).DialContext(ctx, opts.network, t.dialAddress())
 		if err != nil {
 			return verify.Evidence{}, fmt.Errorf("STARTTLS %s: %w", proto, err)
 		}

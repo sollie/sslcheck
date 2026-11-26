@@ -122,7 +122,11 @@ func PrettyPEM(out io.Writer, results []scan.Result, level ColorLevel, withPEM b
 		if i > 0 {
 			_, _ = fmt.Fprintln(w)
 		}
-		_, _ = fmt.Fprintf(w, "%s\n", p.target.Sprintf("Target %s", Safe(r.Target.Address())))
+		heading := "Target " + Safe(r.Target.Address())
+		if r.Target.IP != "" {
+			heading += " (" + Safe(r.Target.IP) + ")"
+		}
+		_, _ = fmt.Fprintf(w, "%s\n", p.target.Sprint(heading))
 		if r.Err != nil {
 			_, _ = fmt.Fprintf(w, "  %s %v\n", p.bad.Sprint("Error:"), Safe(r.Err.Error()))
 			continue
